@@ -3,3 +3,4 @@ uvicorn
 pydantic
 httpx
 llama-cpp-python==0.2.90
+requests
