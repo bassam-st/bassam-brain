@@ -1,24 +1,22 @@
-import os, sys, requests, pathlib
-
-MODEL_URL = os.getenv("MODEL_URL")  # ضعه في بيئة Render
-MODEL_DIR = pathlib.Path("models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-MODEL_PATH = MODEL_DIR / "model.gguf"
-
-if not MODEL_URL:
-    print("MODEL_URL env var is missing.", file=sys.stderr)
-    sys.exit(1)
-
-if MODEL_PATH.exists() and MODEL_PATH.stat().st_size > 100_000_000:
-    print("Model already exists, skipping download.")
-    sys.exit(0)
-
-print("Downloading model from:", MODEL_URL)
-with requests.get(MODEL_URL, stream=True) as r:
-    r.raise_for_status()
-    with open(MODEL_PATH, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
-
-print("Saved to", MODEL_PATH)
+services:
+  - type: web
+    name: bassam-brain
+    env: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      python download_model.py
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MODEL_URL
+        # اختَر واحداً: الأصغر للذاكرة (Q3_K_XL) أو جودة أعلى قليلاً (Q4_K_M)
+        # Q3_K_XL (حوالي 0.37GB):
+        value: https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q3_K_XL.gguf?download=true
+      - key: MODEL_PATH
+        value: models/model.gguf
+      - key: N_CTX
+        value: "512"
+      - key: N_THREADS
+        value: "1"
+      - key: N_BATCH
+        value: "16"
