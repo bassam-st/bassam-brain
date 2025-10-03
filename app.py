@@ -157,23 +157,26 @@ async def llm_answer(question: str, extra: str = "", temperature: float = 0.4, m
 # ====== صفحات بسيطة للتجربة ======
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
-    <div style="max-width:720px;margin:24px auto;font-family:system-ui">
-      <h1>🤖 Bassam Brain — النسخة التجريبية</h1>
-      <form method="post" action="/ask">
-        <textarea name="q" rows="5" style="width:100%" placeholder="اكتب سؤالك هنا..."></textarea>
-        <details style="margin:8px 0">
-          <summary>سياق إضافي (اختياري)</summary>
-          <textarea name="extra" rows="4" style="width:100%" placeholder="ألصق نصًا أو نقاطًا تساعد الإجابة"></textarea>
-        </details>
-        <label>Temperature</label>
-        <input type="number" step="0.1" name="temperature" value="0.7" style="width:90px">
-        <label style="margin-inline-start:8px">Max tokens</label>
-        <input type="number" name="max_new_tokens" value="180" style="width:100px">
-        <div><button style="margin-top:10px">إرسال</button></div>
-      </form>
-    </div>
-    """
+    return f"""
+<div style='max-width:720px;margin:24px auto;font-family:system-ui'>
+  <p><b>🧠 سؤالك:</b> {q}</p>
+  <p><b>💬 الجواب:</b> {ans}</p>
+
+  <form method='post' action='/save'>
+    <input type='hidden' name='q' value='{q}'>
+    <input type='hidden' name='a' value='{ans}'>
+    <button style='background:#007bff;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer'>👍 حفظ في مجموعة التدريب</button>
+  </form>
+
+  <form method='post' action='/save_to_knowledge' style='margin-top:8px'>
+    <input type='hidden' name='q' value='{q}'>
+    <input type='hidden' name='a' value='{ans}'>
+    <button style='background:#28a745;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer'>✅ حفظ هذا الجواب في قاعدة المعرفة</button>
+  </form>
+
+  <p style='margin-top:16px'><a href='/'>◀ رجوع</a></p>
+</div>
+"""
 
 @app.post("/ask", response_class=HTMLResponse)
 async def ask(request: Request):
