@@ -3,20 +3,9 @@ services:
     name: bassam-brain
     env: python
     plan: free
-    buildCommand: |
-      pip install -r requirements.txt
-      python download_model.py
+
+    buildCommand: pip install -r requirements.txt
+
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: MODEL_URL
-        # اختَر واحداً: الأصغر للذاكرة (Q3_K_XL) أو جودة أعلى قليلاً (Q4_K_M)
-        # Q3_K_XL (حوالي 0.37GB):
-        value: https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q3_K_XL.gguf?download=true
-      - key: MODEL_PATH
-        value: models/model.gguf
-      - key: N_CTX
-        value: "512"
-      - key: N_THREADS
-        value: "1"
-      - key: N_BATCH
-        value: "16"
+
+    pythonVersion: 3.9.19
