@@ -7,3 +7,8 @@ requests
 python-multipart
 fuzzywuzzy
 python-Levenshtein
+rapidfuzz==3.9.1
+rank-bm25==0.2.2
+nltk==3.8.1
+scikit-learn==1.4.2
+numpy==1.26.4
