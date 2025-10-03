@@ -4,6 +4,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import pathlib, re, json, time
 from typing import List, Dict, Set, Tuple
 
+# طرفيات بحث/نص
+from rapidfuzz import fuzz, process
+from rank_bm25 import BM25Okapi
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+
 app = FastAPI(title="Bassam Brain – Local QA (Smart)")
 
 # ========= مسارات البيانات =========
@@ -19,9 +25,13 @@ SYN_FILE   = DICT_DIR / "synonyms.txt"
 
 # ملف معرفة افتراضي
 if not KB_FILE.exists():
-    KB_FILE.write_text("سؤال: ما فوائد القراءة؟\nجواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n---\n", encoding="utf-8")
+    KB_FILE.write_text(
+        "سؤال: ما فوائد القراءة؟\n"
+        "جواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n---\n",
+        encoding="utf-8"
+    )
 
-# ملفات القاموس الافتراضية
+# ملفات القاموس الافتراضية (تُعدّل لاحقًا بحرية)
 if not TYPOS_FILE.exists():
     TYPOS_FILE.write_text(
         "# wrong<TAB>right  (سطر يبدأ بـ# يُهمل)\n"
@@ -35,13 +45,13 @@ if not TYPOS_FILE.exists():
         "فويد\tفوائد\n"
         "القراءه\tالقراءة\n"
         "الزمنيه\tالزمنية\n"
-        "الاضطناعي\tالاصطناعي\n"
-        , encoding="utf-8"
+        "الاضطناعي\tالاصطناعي\n",
+        encoding="utf-8"
     )
 
 if not SYN_FILE.exists():
     SYN_FILE.write_text(
-        "# اكتب كل مجموعة مرادفات في سطر مفصولة بفواصل\n"
+        "# كل سطر مجموعة مرادفات مفصولة بفواصل\n"
         "فوائد,مميزات,إيجابيات,حسنات\n"
         "أضرار,سلبيات,عيوب\n"
         "تعريف,ماهو,ما هي,مفهوم\n"
@@ -50,17 +60,13 @@ if not SYN_FILE.exists():
         "حاسوب,كمبيوتر,حاسبة\n"
         "ذكاء اصطناعي,الذكاء الاصطناعي,AI\n"
         "برمجة,تكويد,كود\n"
-        "أمن معلومات,أمن سيبراني,حماية\n"
-        , encoding="utf-8"
+        "أمن معلومات,أمن سيبراني,حماية\n",
+        encoding="utf-8"
     )
 
 # ========= أدوات NLP محلية =========
-from rapidfuzz import fuzz, process
-from rank_bm25 import BM25Okapi
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
 
-# --- تطبيع عربي خفيف
+# --- تطبيع عربي خفيف + رموز
 AR_DIAC  = re.compile(r'[\u064B-\u0652]')                # التشكيل
 TOKEN_RE = re.compile(r'[A-Za-z\u0621-\u064A0-9]+')
 
@@ -70,7 +76,7 @@ def normalize_ar(s: str) -> str:
     s = s.replace('أ','ا').replace('إ','ا').replace('آ','ا')
     s = s.replace('ة','ه').replace('ى','ي').replace('ؤ','و').replace('ئ','ي')
     s = s.replace('گ','ك').replace('پ','ب').replace('ڤ','ف')
-    s = s.replace('ظ','ض')  # نتسامح الض/ظ
+    s = s.replace('ظ','ض')  # تسامح الض/ظ
     s = re.sub(r'\s+',' ', s).strip()
     return s
 
@@ -93,25 +99,10 @@ def load_qa() -> List[dict]:
 
 QA_CACHE: List[dict] = load_qa()
 
-# --- فهارس البحث (BM25 + TF-IDF)
-def build_indexes(qa_list: List[dict]):
-    if not qa_list:
-        return None, [], None, None
-    docs_tokens = [ar_tokens(x["q"] + " " + x["a"]) for x in qa_list]
-    bm25 = BM25Okapi(docs_tokens)
-
-    corpus_norm = [normalize_ar(x["q"]) for x in qa_list]
-    tfidf = TfidfVectorizer(analyzer='char', ngram_range=(3,5), min_df=1)
-    X = tfidf.fit_transform(corpus_norm)
-    return bm25, docs_tokens, tfidf, X
-
-BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
-
 # --- قاموس: مرادفات + تصحيحات + خريطة لبس حروف
 SYN_SETS: List[Set[str]] = []
 TYPOS_MAP: Dict[str,str] = {}
 
-# لبس الحروف (نستخدمه لتوليد مرشحين حرفيًا ثم نتحقق من وجودهم في المفردات)
 CONFUSION_MAP: Dict[str, List[str]] = {
     'س':['ص'], 'ص':['س'],
     'ز':['ذ'], 'ذ':['ز'],
@@ -119,7 +110,7 @@ CONFUSION_MAP: Dict[str, List[str]] = {
     'د':['ذ'], 'ط':['ت'],
     'ق':['غ'], 'غ':['ق'],
     'ح':['خ','ج'], 'ج':['ح','خ'], 'خ':['ح','ج'],
-    'ض':['ظ'],  # الظ طُبّعت إلى ض، نسمح بالعكس عند التوليد
+    'ض':['ظ'],
 }
 
 def load_synonyms():
@@ -129,10 +120,9 @@ def load_synonyms():
         for line in SYN_FILE.read_text(encoding='utf-8').splitlines():
             line=line.strip()
             if not line or line.startswith('#'): continue
-            words = [normalize_ar(w) for w in line.split(',') if w.strip()]
+            words = [normalize_ar(w) for w in line.replace("،",",").split(',') if w.strip()]
             if len(words)>=2:
                 SYN_SETS.append(set(words))
-    # fallback بسيط لو الملف فاضي
     if not SYN_SETS:
         SYN_SETS = [
             {"فوائد","مميزات","ايجابيات","حسنات"},
@@ -165,25 +155,13 @@ def build_vocab():
         for w in ar_tokens(qa["q"] + " " + qa["a"]):
             if len(w) > 2:
                 VOCAB.add(w.lower())
-    # نضيف مرادفات أيضاً للفائدة
     for syn in SYN_SETS:
         for w in syn:
             if len(w)>2: VOCAB.add(w.lower())
-
 build_vocab()
 
-def expand_query(q: str) -> str:
-    qn = normalize_ar(q)
-    extra = []
-    for syn in SYN_SETS:
-        if any(w in qn for w in syn):
-            extra.extend(list(syn))
-    if extra:
-        qn += " " + " ".join(extra)
-    return qn
-
+# --- مصحّح + توسعة دلالية
 def generate_confusion_candidates(token: str) -> List[str]:
-    """توليد مرشحين بتبديل حرف واحد وفق خريطة اللبس ثم نتحقق هل المرشح موجود في المفردات."""
     cands=set()
     chars=list(token)
     for i,ch in enumerate(chars):
@@ -195,23 +173,18 @@ def generate_confusion_candidates(token: str) -> List[str]:
     return [c for c in cands if c in VOCAB]
 
 def correct_spelling_ar(text: str) -> str:
-    """تصحيح: (1) من القاموس الصريح، (2) مرشحو اللبس، (3) أقرب مفردة بالفَزّي."""
     toks = TOKEN_RE.findall(normalize_ar(text))
     out=[]
     for w in toks:
         lw=w.lower()
         if len(lw)<=2 or lw in VOCAB:
             out.append(lw); continue
-        # 1) قاموس صريح
         if lw in TYPOS_MAP:
             out.append(TYPOS_MAP[lw]); continue
-        # 2) مرشحو اللبس
         vcands = generate_confusion_candidates(lw)
         if vcands:
-            # اختر الأقرب شبهاً
             best = process.extractOne(lw, vcands, scorer=fuzz.WRatio)[0]
             out.append(best); continue
-        # 3) أقرب مفردة عامة
         cand = process.extractOne(lw, VOCAB, scorer=fuzz.WRatio)
         if cand and cand[1] >= 88:
             out.append(cand[0])
@@ -219,13 +192,36 @@ def correct_spelling_ar(text: str) -> str:
             out.append(lw)
     return " ".join(out)
 
-# --- فهرسة من جديد
+def expand_query(q: str) -> str:
+    qn = normalize_ar(q)
+    extra = []
+    for syn in SYN_SETS:
+        if any(w in qn for w in syn):
+            extra.extend(list(syn))
+    if extra:
+        qn += " " + " ".join(extra)
+    return qn
+
+# --- فهارس البحث (BM25 + TF-IDF)
+def build_indexes(qa_list: List[dict]):
+    if not qa_list:
+        return None, [], None, None
+    docs_tokens = [ar_tokens(correct_spelling_ar(x["q"] + " " + x["a"])) for x in qa_list]
+    bm25 = BM25Okapi(docs_tokens)
+
+    corpus_norm = [normalize_ar(correct_spelling_ar(x["q"])) for x in qa_list]
+    tfidf = TfidfVectorizer(analyzer='char', ngram_range=(3,5), min_df=1)
+    X = tfidf.fit_transform(corpus_norm)
+    return bm25, docs_tokens, tfidf, X
+
+BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
+
 def reload_all():
     global QA_CACHE, BM25, BM25_DOCS, TFVEC, X_TFIDF
     QA_CACHE = load_qa()
-    BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
     load_synonyms(); load_typos()
     build_vocab()
+    BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
 
 # --- البحث المركّب
 def combined_search(user_q: str, topk: int = 5):
@@ -233,8 +229,8 @@ def combined_search(user_q: str, topk: int = 5):
         return None, 0.0
 
     q_base     = normalize_ar(user_q)
-    q_correct  = correct_spelling_ar(q_base)     # ⬅ تصحيح إملائي
-    q_expanded = expand_query(q_correct)         # ⬅ توسيع دلالي
+    q_correct  = correct_spelling_ar(q_base)
+    q_expanded = expand_query(q_correct)
 
     q_norm = q_expanded
     q_tok  = ar_tokens(q_norm)
@@ -268,7 +264,7 @@ def combined_search(user_q: str, topk: int = 5):
     best_idx, best_score = sorted(scores.items(), key=lambda x: x[1], reverse=True)[0]
     return QA_CACHE[best_idx], best_score
 
-# --- الإجابة
+# --- المُجيب
 async def local_qa_answer(question: str) -> str:
     question = (question or "").strip()
     if not question:
@@ -297,7 +293,7 @@ def clamp(s: str, n: int) -> str:
 def home():
     return f"""
     <div style="max-width:780px;margin:24px auto;font-family:system-ui">
-      <h1>🤖 Bassam Brain — المحلي (مع تصحيح إملائي + فهم ذكي)</h1>
+      <h1>🤖 Bassam Brain — المحلي (تصحيح إملائي + مرادفات + بحث مركّب)</h1>
       <form method="post" action="/ask">
         <textarea name="q" rows="5" style="width:100%" placeholder="اكتب سؤالك هنا..."></textarea>
         <div style="margin-top:8px"><button>إرسال</button></div>
@@ -386,10 +382,16 @@ async def add_typo(request: Request):
         f.write(f"{wrong}\t{right}\n")
     return "<p>✅ أُضيف التصحيح إلى القاموس. اضغط إعادة التحميل لتفعيله.</p><p><a href='/'>◀ رجوع</a></p>"
 
+# إعادة تحميل كل شيء (قاعدة المعرفة + القواميس + الفهارس)
 @app.post("/reload_all")
 def reload_all_endpoint():
     reload_all()
     return {"ok": True, "qa_count": len(QA_CACHE), "vocab": len(VOCAB)}
+
+# alias قديم لو تحب
+@app.post("/reload_kb")
+def reload_kb_endpoint():
+    return reload_all_endpoint()
 
 # ===== API =====
 @app.get("/ready")
