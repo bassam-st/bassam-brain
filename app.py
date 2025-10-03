@@ -2,7 +2,89 @@
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 import os, httpx, json, time, pathlib, re
+# ====== محلّل نصوص خفيف ======
+AR_POS = {"جيد","ممتاز","رائع","جميل","سعيد","مبروك","نجاح","إيجابي","محب"}
+AR_NEG = {"سيئ","سئ","حزين","فشل","سخط","كره","غضب","ضعيف","كارثي","مشكل","خطأ","سلبي"}
+STOP_AR = set("من في على إلى عن أن إن كان كانت يكون يكونوا تكون تكونين ثم حيث فهو وهي و أو اذا إذا لذلك لكن ما هذا هذه هو هي هم هن نحن أنت انتم انتن كما كما".split())
 
+import re, math, collections
+
+def simple_tokens(text):
+    return re.findall(r"[A-Za-z\u0621-\u064A0-9]+", text)
+
+def is_question(text):
+    return text.strip().endswith(("؟","?")) or text.strip().startswith(("هل","كيف","متى","أين","ما","لماذا","كم"))
+
+def sentiment(text):
+    t = set(simple_tokens(text))
+    p = len(t & AR_POS); n = len(t & AR_NEG)
+    if p-n > 1: return "إيجابي"
+    if n-p > 1: return "سلبي"
+    return "محايد"
+
+def extract_entities(text):
+    ents = {}
+    ents["emails"] = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+    ents["phones"] = re.findall(r"\+?\d[\d\s\-]{6,}\d", text)
+    ents["currency"] = re.findall(r"(?:\$|€|£|ريال|درهم|دينار|جنيه)\s*\d+(?:[\.,]\d+)?", text)
+    ents["dates"] = re.findall(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\b", text)
+    ents["names"] = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", text)
+    return ents
+
+TOPIC_KWS = {
+    "تقنية": {"برمجة","كود","تطبيق","خادم","موبايل","ويب","ذكاء","اصطناعي","API","بايثون","جافا"},
+    "تعليم": {"دراسة","جامعة","مدرسة","منهج","واجب","شرح","امتحان"},
+    "صحة": {"طبيب","مرض","علاج","أعراض","تشخيص","صحي","تغذية"},
+    "دين": {"الصلاة","الزكاة","الصيام","القرآن","حديث","دعاء","فقه"},
+    "مال": {"سعر","دفع","فاتورة","ميزانية","استثمار","ربح","خسارة","رسوم"},
+    "سفر": {"تأشيرة","رحلة","حجز","مطار","طيران","فندق"},
+}
+
+def guess_topic(text):
+    t = set(simple_tokens(text))
+    scores = {k: len(t & v) for k,v in TOPIC_KWS.items()}
+    topic,score = max(scores.items(), key=lambda x:x[1])
+    return topic if score>0 else "عام"
+
+def keywords(text, topk=8):
+    toks = [w for w in simple_tokens(text) if w not in STOP_AR and len(w)>2]
+    freq = collections.Counter([w.lower() for w in toks])
+    return [w for w,_ in freq.most_common(topk)]
+
+def summarize(text, max_sent=2):
+    sents = re.split(r"[\.!\?؟]\s*", text)
+    if len(sents)<=max_sent: return text.strip()
+    scores=[]; freq = collections.Counter([w.lower() for w in simple_tokens(text) if w not in STOP_AR])
+    for s in sents:
+        score = sum(freq[w.lower()] for w in simple_tokens(s))
+        scores.append((score, s))
+    top = [s for _,s in sorted(scores, reverse=True)[:max_sent]]
+    return "، ".join([s.strip() for s in top if s.strip()])
+
+async def smart_enhance(text):
+    if os.getenv("USE_UPSTREAM","1") != "1": 
+        return None
+    try:
+        headers={"Content-Type":"application/json"}
+        if UPSTREAM_API_KEY: headers["Authorization"]=f"Bearer {UPSTREAM_API_KEY}"
+        payload={
+            "model": UPSTREAM_MODEL,
+            "messages":[
+                {"role":"system","content":"حلّل النص بإرجاع JSON فيه: intent, sentiment, keypoints, entities. أعد JSON فقط."},
+                {"role":"user","content": text}
+            ],
+            "temperature":0.3,
+            "max_tokens":300
+        }
+        async with httpx.AsyncClient(timeout=25) as cl:
+            r=await cl.post(UPSTREAM_API_URL, headers=headers, json=payload)
+            r.raise_for_status()
+            data=r.json()
+            raw=(data.get("choices") or [{}])[0].get("message",{}).get("content","{}")
+            import json as _json
+            return _json.loads(raw)
+    except Exception:
+        return None
 app = FastAPI(title="Bassam Brain – Lite")
 
 # ====== مسارات الملفات والذاكرة ======
