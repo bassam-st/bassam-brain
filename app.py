@@ -6,45 +6,48 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 import json, time
 
-from core.brain import smart_answer, save_to_knowledge, KB_FILE, DATA_DIR, reload_kb
+from core.brain import smart_answer, save_to_knowledge, KB_FILE
 
-app = FastAPI(title="Bassam Brain — Local + Web")
+app = FastAPI(title="Bassam Brain — Local + Web Intelligence")
 
-# --- ملفات ثابتة + قوالب واجهة ---
+# إنشاء مجلدات ثابتة
 Path("static").mkdir(exist_ok=True)
 Path("templates").mkdir(exist_ok=True)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
 LOG_FILE = DATA_DIR / "log.jsonl"
-FEED_FILE = DATA_DIR / "feedback_pool.jsonl"
 
-
-# الصفحة الرئيسية (واجهة بسيطة)
+# ✅ الصفحة الرئيسية
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# استقبال السؤال من الواجهة
+# ✅ استقبال السؤال من المستخدم وتحليل الإجابة
 @app.post("/ask", response_class=HTMLResponse)
 async def ask(request: Request):
     form = await request.form()
     q = (form.get("q") or "").strip()
+
+    # تحليل السؤال وتوليد الإجابة
     ans, meta = smart_answer(q)
 
-    # سجل
+    # تسجيل العملية
     rec = {"ts": int(time.time()), "q": q, "answer": ans, "meta": meta}
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "last_q": q, "last_a": ans, "links": (meta.get("links") or [])},
+        {"request": request, "last_q": q, "last_a": ans, "links": meta.get("links", [])},
     )
 
 
-# حفظ جواب في قاعدة المعرفة
+# ✅ حفظ سؤال وجواب في قاعدة المعرفة
 @app.post("/save", response_class=HTMLResponse)
 async def save(request: Request):
     form = await request.form()
@@ -56,14 +59,7 @@ async def save(request: Request):
     return HTMLResponse("<p>✅ تم الحفظ في قاعدة المعرفة.</p><p><a href='/'>◀ رجوع</a></p>")
 
 
-# إعادة تحميل الذاكرة بعد تعديل knowledge.txt يدويًا (اختياري)
-@app.post("/reload_kb")
-def reload_kb_endpoint():
-    reload_kb()
-    return {"ok": True, "kb_exists": KB_FILE.exists()}
-
-
-# ============ API ============
+# ✅ واجهة API لربط النموذج بتطبيق بسام لاحقًا
 @app.post("/api/answer")
 async def api_answer(req: Request):
     body = await req.json()
@@ -80,6 +76,7 @@ async def api_answer(req: Request):
     return JSONResponse({"ok": True, "answer": ans, "meta": meta})
 
 
+# ✅ فحص الجاهزية
 @app.get("/ready")
 def ready():
     return {"ok": True, "kb_exists": KB_FILE.exists()}
