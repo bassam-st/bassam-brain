@@ -1,16 +1,13 @@
-# ==== Server ====
+# ==== Bassam Brain (العقل المزدوج) ====
 fastapi==0.110.0
 uvicorn==0.23.2
-jinja2==3.1.3
 python-multipart==0.0.9
+jinja2==3.1.3
 
-# ==== HTTP / Parsing ====
-httpx==0.27.0
+# بحث/ويب
+duckduckgo_search==6.2.6
 beautifulsoup4==4.12.3
-lxml==5.2.2
+httpx==0.27.0
 
-# ==== NLP خفيف ====
+# ذكاء محلي خفيف (اختياري)
 rapidfuzz==3.6.1
-
-# ==== مصادر بحث مساعدة ====
-duckduckgo_search==6.2.6  # fallback
