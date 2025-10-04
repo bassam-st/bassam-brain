@@ -2,12 +2,5 @@ services:
   - type: web
     name: bassam-brain
     env: python
-    plan: free
-
-    pythonVersion: 3.9.19
-
-    buildCommand: |
-      pip install --upgrade pip==23.2.1 setuptools==68.0.0 wheel==0.41.2
-      pip install -r requirements.txt
-
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
