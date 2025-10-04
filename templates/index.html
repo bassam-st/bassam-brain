@@ -3,121 +3,145 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي — عقل مزدوج 🔍🤖</title>
-  <style>
-    body {
-      font-family: "Cairo", sans-serif;
-      background: #0b0f19;
-      color: #f0f0f0;
-      margin: 0;
-      padding: 0;
-      text-align: center;
-    }
-    header {
-      background: #111827;
-      padding: 15px;
-      font-size: 1.3em;
-      font-weight: bold;
-      color: #90caf9;
-      box-shadow: 0 0 8px #000;
-    }
-    main {
-      max-width: 650px;
-      margin: 30px auto;
-      padding: 20px;
-      background: #1e293b;
-      border-radius: 12px;
-      box-shadow: 0 0 12px rgba(0,0,0,0.5);
-    }
-    input, button {
-      font-size: 1em;
-      padding: 10px;
-      margin: 8px 0;
-      border-radius: 8px;
-      border: none;
-      outline: none;
-    }
-    input {
-      width: 90%;
-      background: #0f172a;
-      color: white;
-      border: 1px solid #334155;
-      text-align: right;
-    }
-    button {
-      background: #2563eb;
-      color: white;
-      cursor: pointer;
-      width: 50%;
-      transition: 0.3s;
-    }
-    button:hover {
-      background: #1d4ed8;
-    }
-    #answer {
-      text-align: right;
-      background: #0f172a;
-      padding: 15px;
-      border-radius: 10px;
-      margin-top: 15px;
-      line-height: 1.8em;
-      border: 1px solid #334155;
-      white-space: pre-wrap;
-    }
-    #links a {
-      color: #90caf9;
-      text-decoration: none;
-    }
-    #links a:hover {
-      text-decoration: underline;
-    }
-  </style>
-</head>
-<body>
-  <header>🤖 بسام الذكي — عقل مزدوج (محلي + ويب)</header>
+  <title>بسام الذكي – بحث عميق وتوليد إجابات ذكية</title>
 
-  <main>
-    <form id="askForm">
-      <input id="q" name="q" placeholder="اكتب سؤالك هنا..." required/>
-      <br>
-      <button type="submit">إرسال السؤال</button>
-    </form>
+  <!-- PWA -->
+  <link rel="manifest" href="/static/pwa/manifest.json">
+  <meta name="theme-color" content="#0b0f19"/>
 
-    <div id="answer">🧠 في انتظار سؤالك...</div>
-    <div id="links"></div>
-  </main>
+  <!-- CSS -->
+  <link rel="stylesheet" href="/static/style.css"/>
 
   <script>
-    const form = document.getElementById('askForm');
-    const q = document.getElementById('q');
-    const answerDiv = document.getElementById('answer');
-    const linksDiv = document.getElementById('links');
+    // الوضع الليلي/النهاري
+    function toggleTheme() {
+      const toLight = document.body.classList.toggle("light");
+      localStorage.setItem("theme", toLight ? "light" : "dark");
+    }
+    window.onload = () => {
+      const saved = localStorage.getItem("theme");
+      if (saved === "light") document.body.classList.add("light");
+    };
+  </script>
+</head>
 
-    form.addEventListener('submit', async (e) => {
+<body>
+  <header class="top">
+    <h1>بسام الذكي — بحث عميق وتوليد إجابات</h1>
+    <div class="actions">
+      <button id="installBtn" hidden>📲 تثبيت التطبيق</button>
+      <button id="themeBtn" onclick="toggleTheme()">🌙 / ☀️</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <form id="searchForm" class="row">
+      <input id="q" placeholder="اكتب سؤالك هنا..." required/>
+
+      <div class="row" style="gap:.75rem;flex-wrap:wrap;margin-top:.5rem">
+        <label class="chk">
+          <input type="checkbox" id="dual_mode"/>
+          عقل مزدوج (محلي + ويب)
+        </label>
+
+        <label class="chk">
+          <input type="checkbox" id="want_prices"/>
+          روابط الأسعار 🔗
+        </label>
+      </div>
+
+      <button type="submit" style="margin-top:.5rem">🔍 بحث</button>
+    </form>
+
+    <div id="answer" class="answer-block">... بانتظار سؤالك 🤖</div>
+    <div id="sources"></div>
+  </section>
+
+  <footer>
+    © 2025 <strong>بسام الذكي</strong> — بحث عميق مجاني 💜
+  </footer>
+
+  <!-- وظائف الواجهة -->
+  <script>
+    async function postJSON(url, data) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+      });
+      return r.json();
+    }
+    const el = (id) => document.getElementById(id);
+
+    // دمج الإجابتين (المحلية + الويب) بشكل أنيق
+    function mergeDual(local, web) {
+      let out = "";
+      if (local) {
+        out += "🧠 جواب محلي:\n" + local.trim() + "\n\n";
+      }
+      if (web) {
+        out += "🌐 ملخص الويب:\n" + web.trim();
+      }
+      return out || "لم أجد نصًا لأعرضه.";
+    }
+
+    async function doSearch(e){
       e.preventDefault();
-      const question = q.value.trim();
-      if(!question) return;
 
-      answerDiv.textContent = "⏳ جاري التفكير والبحث...";
-      linksDiv.innerHTML = "";
+      const q = el("q").value.trim();
+      const want_prices = el("want_prices").checked;
+      const dual_mode   = el("dual_mode").checked;
+
+      el("answer").textContent = "🔎 جاري البحث...";
+      el("sources").innerHTML = "";
 
       try {
-        const formData = new FormData();
-        formData.append("q", question);
-        const r = await fetch("/ask", { method: "POST", body: formData });
-        const data = await r.json();
+        const res = await postJSON("/search", { q, want_prices, dual_mode });
 
-        if (data.error) {
-          answerDiv.textContent = "⚠️ حدث خطأ: " + data.error;
-          return;
+        if (!res.ok) throw new Error(res.error || "حدث خطأ أثناء البحث");
+
+        // إن كان الظهور “مزدوج”
+        if (dual_mode && (res.local || res.web)) {
+          el("answer").textContent = mergeDual(res.local, res.web);
+        } else {
+          // الوضع العادي (الخادم يعيد answer النهائي)
+          el("answer").innerHTML = (res.answer || "لم أجد إجابة دقيقة 😢")
+            .replace(/\n/g, "<br>");
         }
 
-        answerDiv.textContent = data.answer || "لم يتم العثور على إجابة.";
-        if (data.links && data.links.length > 0) {
-          linksDiv.innerHTML = "<h4>🌐 روابط:</h4>" + data.links.map(u => `<a href="${u}" target="_blank">${u}</a><br>`).join("");
+        // مصادر
+        const links = res.links || res.sources || [];
+        if (links.length){
+          el("sources").innerHTML = links
+            .map(s => `<a href="${s}" target="_blank">🔗 ${s}</a>`)
+            .join("");
         }
       } catch (err) {
-        answerDiv.textContent = "❌ حدث خطأ أثناء الاتصال بالخادم.";
+        el("answer").innerHTML = "❌ فشل في الاتصال أو في معالجة الطلب.";
+        console.error(err);
+      }
+    }
+
+    document.getElementById("searchForm").addEventListener("submit", doSearch);
+  </script>
+
+  <!-- تثبيت PWA -->
+  <script>
+    let deferredPrompt;
+    const installBtn = document.getElementById("installBtn");
+
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.hidden = false;
+    });
+
+    installBtn.addEventListener("click", async () => {
+      installBtn.hidden = true;
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
       }
     });
   </script>
