@@ -1,188 +1,85 @@
-# core/brain.py
-# عقل مزدوج: (1) قاعدة معرفة محلية + فَهْم/تصحيح خفيف
-#            (2) بحث ويب عبر DuckDuckGo + <تلخيص نقطي+تحليل الاسئله وقراءة المواقع وارسال الاجوبه للمستخدم>
-
-from typing import List, Dict, Tuple
+# app.py — Bassam Brain (عقل مزدوج: محلي + بحث ويب)
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import re, time
+import json, time
 
-from rapidfuzz import fuzz, process
-from duckduckgo_search import DDGS
-from bs4 import BeautifulSoup
+from core.brain import smart_answer, save_to_knowledge, KB_FILE, DATA_DIR, reload_kb
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-KB_FILE = DATA_DIR / "knowledge.txt"
+app = FastAPI(title="Bassam Brain — Local + Web")
 
-# ———————————— تجهيز ملف معرفة مبدئي ————————————
-if not KB_FILE.exists():
-    KB_FILE.write_text(
-        "سؤال: ما فوائد القراءة؟\n"
-        "جواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n"
-        "---\n",
-        encoding="utf-8"
+# --- ملفات ثابتة + قوالب واجهة ---
+Path("static").mkdir(exist_ok=True)
+Path("templates").mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+LOG_FILE = DATA_DIR / "log.jsonl"
+FEED_FILE = DATA_DIR / "feedback_pool.jsonl"
+
+
+# الصفحة الرئيسية (واجهة بسيطة)
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+# استقبال السؤال من الواجهة
+@app.post("/ask", response_class=HTMLResponse)
+async def ask(request: Request):
+    form = await request.form()
+    q = (form.get("q") or "").strip()
+    ans, meta = smart_answer(q)
+
+    # سجل
+    rec = {"ts": int(time.time()), "q": q, "answer": ans, "meta": meta}
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "last_q": q, "last_a": ans, "links": (meta.get("links") or [])},
     )
 
-# ———————————— أدوات عربية بسيطة ————————————
-AR_DIAC  = re.compile(r'[\u064B-\u0652]')  # التشكيل
-TOKEN_RE = re.compile(r'[A-Za-z\u0621-\u064A0-9]+')
 
-
-def normalize_ar(s: str) -> str:
-    s = s or ""
-    s = AR_DIAC.sub("", s)
-    s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
-    s = s.replace("ة", "ه").replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
-    s = s.replace("گ", "ك").replace("پ", "ب").replace("ڤ", "ف")
-    s = s.replace("ظ", "ض")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def tokens(s: str) -> List[str]:
-    return TOKEN_RE.findall(normalize_ar(s))
-
-
-# ———————————— تحميل Q/A ————————————
-def load_qa() -> List[Dict]:
-    text = KB_FILE.read_text(encoding="utf-8")
-    blocks = [b.strip() for b in text.split("---") if b.strip()]
-    out = []
-    for b in blocks:
-        m1 = re.search(r"سؤال\s*:\s*(.+)", b)
-        m2 = re.search(r"جواب\s*:\s*(.+)", b)
-        if m1 and m2:
-            out.append({"q": m1.group(1).strip(), "a": m2.group(1).strip()})
-    return out
-
-
-QA = load_qa()
-VOCAB = {w.lower() for qa in QA for w in tokens(qa["q"] + " " + qa["a"]) if len(w) > 2}
-
-
-def correct_spelling_ar(text: str) -> str:
-    toks = tokens(text)
-    out = []
-    for w in toks:
-        lw = w.lower()
-        if lw in VOCAB or len(lw) <= 2:
-            out.append(lw)
-            continue
-        cand = process.extractOne(lw, VOCAB, scorer=fuzz.WRatio)
-        out.append(cand[0] if cand and cand[1] >= 90 else lw)
-    return " ".join(out)
-
-
-def local_search(q: str) -> Tuple[Dict, float]:
-    """بحث بسيط في Q/A باستخدام rapidfuzz فقط (بدون numpy)."""
-    if not QA:
-        return None, 0.0
-    qn = correct_spelling_ar(q)
-    best_doc, best_score = None, 0.0
-    for qa in QA:
-        s = fuzz.token_set_ratio(qn, normalize_ar(qa["q"]))
-        if s > best_score:
-            best_doc, best_score = qa, float(s)
-    return best_doc, best_score
-
-
-# ———————————— بحث الويب + تلخيص ————————————
-def web_search(query: str, max_results: int = 6) -> List[Dict]:
-    results = []
-    with DDGS() as dd:
-        for r in dd.text(query, max_results=max_results):
-            # r يحتوي عادة: title, body, href
-            results.append({
-                "title": (r.get("title") or "").strip(),
-                "snippet": (r.get("body") or "").strip(),
-                "link": (r.get("href") or "").strip(),
-            })
-    return results
-
-
-def _clean_lines(text: str, max_lines: int = 4) -> List[str]:
-    if not text:
-        return []
-    lines = [l.strip(" .\t\r\n") for l in text.splitlines()]
-    lines = [l for l in lines if 15 <= len(l) <= 220]
-    out, seen = [], set()
-    for l in lines:
-        if l in seen: 
-            continue
-        seen.add(l)
-        out.append(l)
-        if len(out) >= max_lines:
-            break
-    return out
-
-
-def compose_web_answer(question: str, results: List[Dict]) -> Dict:
-    bullets, links = [], []
-    for r in results[:6]:
-        t = r.get("title") or ""
-        s = r.get("snippet") or ""
-        u = r.get("link") or ""
-        if u:
-            links.append(u)
-        if 15 <= len(t) <= 140:
-            bullets.append(t.strip())
-        bullets.extend(_clean_lines(s, max_lines=2))
-
-    # إزالة التكرار
-    clean, seen = [], set()
-    for b in bullets:
-        if b and b not in seen:
-            seen.add(b)
-            clean.append(b)
-        if len(clean) >= 10:
-            break
-
-    if not clean:
-        return {
-            "answer": "بحثت في الويب لكن لم أجد نقاطًا واضحة كفاية. جرّب إعادة صياغة سؤالك.",
-            "links": links[:5]
-        }
-
-    head = f"سؤالك: {question}\n\nهذا ملخص مُنظم من عدة مصادر:\n"
-    body = "\n".join([f"• {b}" for b in clean])
-    tail = ""
-    if links:
-        tail = "\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])
-    return {"answer": head + body + tail, "links": links[:5]}
-
-
-# ———————————— الواجهة الموحدة ————————————
-def smart_answer(question: str) -> Tuple[str, Dict]:
-    q = (question or "").strip()
-    if not q:
-        return "لم أستلم سؤالًا.", {"mode": "invalid"}
-
-    # 1) قاعدة المعرفة
-    doc, score = local_search(q)
-    if doc and score >= 85:
-        # تطابق قوي
-        return doc["a"], {"mode": "local", "score": score, "match": doc["q"]}
-
-    # 2) الويب
-    results = web_search(q, max_results=6)
-    if results:
-        pack = compose_web_answer(q, results)
-        return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
-
-    # 3) fallback
-    if doc:
-        return (
-            f"لم أجد إجابة مؤكدة. أقرب سؤال عندي:\n«{doc['q']}».\n"
-            f"الجواب المخزن: {doc['a']}\n\n"
-            "يمكنك حفظ إجابتك الخاصة في القاعدة لتحسين النتائج لاحقًا."
-        ), {"mode": "suggest", "score": score}
-    return "لا أملك معلومات كافية بعد. أضف س/ج مشابه في قاعدة المعرفة أو غيّر صياغة السؤال.", {"mode": "none"}
-
-
-def save_to_knowledge(q: str, a: str) -> None:
-    q = (q or "").strip()
-    a = (a or "").strip()
+# حفظ جواب في قاعدة المعرفة
+@app.post("/save", response_class=HTMLResponse)
+async def save(request: Request):
+    form = await request.form()
+    q = (form.get("q") or "").strip()
+    a = (form.get("a") or "").strip()
     if not q or not a:
-        return
-    with KB_FILE.open("a", encoding="utf-8") as f:
-        f.write(f"\nسؤال: {q}\nجواب: {a}\n---\n")
+        return HTMLResponse("<p>⚠️ أدخل سؤالًا وجوابًا.</p><p><a href='/'>رجوع</a></p>", status_code=400)
+    save_to_knowledge(q, a)
+    return HTMLResponse("<p>✅ تم الحفظ في قاعدة المعرفة.</p><p><a href='/'>◀ رجوع</a></p>")
+
+
+# إعادة تحميل الذاكرة بعد تعديل knowledge.txt يدويًا (اختياري)
+@app.post("/reload_kb")
+def reload_kb_endpoint():
+    reload_kb()
+    return {"ok": True, "kb_exists": KB_FILE.exists()}
+
+
+# ============ API ============
+@app.post("/api/answer")
+async def api_answer(req: Request):
+    body = await req.json()
+    q = (body.get("question") or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="ضع حقل 'question'")
+    ans, meta = smart_answer(q)
+
+    # سجل
+    rec = {"ts": int(time.time()), "q": q, "answer": ans, "meta": meta}
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    return JSONResponse({"ok": True, "answer": ans, "meta": meta})
+
+
+@app.get("/ready")
+def ready():
+    return {"ok": True, "kb_exists": KB_FILE.exists()}
