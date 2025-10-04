@@ -1,161 +1,188 @@
-# app.py — Bassam Brain (محلي + تصحيح + فهم ذكي + بحث ويب + عقل مزدوج)
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-import pathlib, re, json, time, asyncio
-from typing import List, Dict, Set, Tuple
+# core/brain.py
+# عقل مزدوج: (1) قاعدة معرفة محلية + فَهْم/تصحيح خفيف
+#            (2) بحث ويب عبر DuckDuckGo + تلخيص نقطي+تحليل الاسئله وقراءة المواقع وارسال الاجوبه للمستخدم
 
-# ==================== الإعداد الأساسي ====================
-app = FastAPI(title="Bassam Brain – Dual AI Engine")
+from typing import List, Dict, Tuple
+from pathlib import Path
+import re, time
 
-DATA_DIR   = pathlib.Path("data"); DATA_DIR.mkdir(exist_ok=True)
-NOTES_DIR  = DATA_DIR / "notes";  NOTES_DIR.mkdir(exist_ok=True)
-DICT_DIR   = DATA_DIR / "dict";   DICT_DIR.mkdir(exist_ok=True)
-
-LOG_FILE   = DATA_DIR / "log.jsonl"
-FEED_FILE  = DATA_DIR / "feedback_pool.jsonl"
-KB_FILE    = NOTES_DIR / "knowledge.txt"
-TYPOS_FILE = DICT_DIR / "typos.tsv"
-SYN_FILE   = DICT_DIR / "synonyms.txt"
-
-# قاعدة معرفة افتراضية
-if not KB_FILE.exists():
-    KB_FILE.write_text("سؤال: ما فوائد القراءة؟\nجواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n---\n", encoding="utf-8")
-
-# ==================== المكاتب المطلوبة ====================
 from rapidfuzz import fuzz, process
-from rank_bm25 import BM25Okapi
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
+from duckduckgo_search import DDGS
+from bs4 import BeautifulSoup
 
-# استيراد البحث في الويب وصياغة الإجابة
-from core.search_web import web_search
-from core.compose_answer import compose_answer_ar
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+KB_FILE = DATA_DIR / "knowledge.txt"
 
-# ==================== أدوات اللغة ====================
-AR_DIAC  = re.compile(r'[\u064B-\u0652]')
+# ———————————— تجهيز ملف معرفة مبدئي ————————————
+if not KB_FILE.exists():
+    KB_FILE.write_text(
+        "سؤال: ما فوائد القراءة؟\n"
+        "جواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n"
+        "---\n",
+        encoding="utf-8"
+    )
+
+# ———————————— أدوات عربية بسيطة ————————————
+AR_DIAC  = re.compile(r'[\u064B-\u0652]')  # التشكيل
 TOKEN_RE = re.compile(r'[A-Za-z\u0621-\u064A0-9]+')
+
 
 def normalize_ar(s: str) -> str:
     s = s or ""
-    s = AR_DIAC.sub('', s)
-    s = s.replace('أ','ا').replace('إ','ا').replace('آ','ا')
-    s = s.replace('ة','ه').replace('ى','ي').replace('ؤ','و').replace('ئ','ي')
-    s = s.replace('گ','ك').replace('پ','ب').replace('ڤ','ف').replace('ظ','ض')
-    return re.sub(r'\s+',' ', s).strip()
+    s = AR_DIAC.sub("", s)
+    s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    s = s.replace("ة", "ه").replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
+    s = s.replace("گ", "ك").replace("پ", "ب").replace("ڤ", "ف")
+    s = s.replace("ظ", "ض")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-def ar_tokens(s: str) -> List[str]:
+
+def tokens(s: str) -> List[str]:
     return TOKEN_RE.findall(normalize_ar(s))
 
-# ==================== تحميل المعرفة والقواميس ====================
-def load_qa() -> List[dict]:
-    text = KB_FILE.read_text(encoding='utf-8') if KB_FILE.exists() else ""
-    qa = []
-    for b in [x.strip() for x in text.split('---') if x.strip()]:
-        m1, m2 = re.search(r'سؤال\s*:\s*(.+)', b), re.search(r'جواب\s*:\s*(.+)', b)
+
+# ———————————— تحميل Q/A ————————————
+def load_qa() -> List[Dict]:
+    text = KB_FILE.read_text(encoding="utf-8")
+    blocks = [b.strip() for b in text.split("---") if b.strip()]
+    out = []
+    for b in blocks:
+        m1 = re.search(r"سؤال\s*:\s*(.+)", b)
+        m2 = re.search(r"جواب\s*:\s*(.+)", b)
         if m1 and m2:
-            qa.append({"q": m1.group(1).strip(), "a": m2.group(1).strip()})
-    return qa
+            out.append({"q": m1.group(1).strip(), "a": m2.group(1).strip()})
+    return out
 
-QA_CACHE = load_qa()
 
-def build_indexes(qa_list: List[dict]):
-    if not qa_list: return None, [], None, None
-    docs_tokens = [ar_tokens(x["q"]+" "+x["a"]) for x in qa_list]
-    bm25 = BM25Okapi(docs_tokens)
-    corpus_norm = [normalize_ar(x["q"]) for x in qa_list]
-    tfidf = TfidfVectorizer(analyzer='char', ngram_range=(3,5), min_df=1)
-    X = tfidf.fit_transform(corpus_norm)
-    return bm25, docs_tokens, tfidf, X
+QA = load_qa()
+VOCAB = {w.lower() for qa in QA for w in tokens(qa["q"] + " " + qa["a"]) if len(w) > 2}
 
-BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
 
-def reload_all():
-    global QA_CACHE, BM25, BM25_DOCS, TFVEC, X_TFIDF
-    QA_CACHE = load_qa()
-    BM25, BM25_DOCS, TFVEC, X_TFIDF = build_indexes(QA_CACHE)
+def correct_spelling_ar(text: str) -> str:
+    toks = tokens(text)
+    out = []
+    for w in toks:
+        lw = w.lower()
+        if lw in VOCAB or len(lw) <= 2:
+            out.append(lw)
+            continue
+        cand = process.extractOne(lw, VOCAB, scorer=fuzz.WRatio)
+        out.append(cand[0] if cand and cand[1] >= 90 else lw)
+    return " ".join(out)
 
-# ==================== البحث المحلي الذكي ====================
-def combined_search(user_q: str, topk: int = 5):
-    if not QA_CACHE: return None, 0.0
-    qn = normalize_ar(user_q)
-    q_tok = ar_tokens(qn)
-    scores = {}
 
-    # BM25
-    if BM25:
-        for i, s in enumerate(BM25.get_scores(q_tok)):
-            if s > 0: scores[i] = scores.get(i, 0) + s * 10
-
-    # غموض (fuzz)
-    for i, qa in enumerate(QA_CACHE):
+def local_search(q: str) -> Tuple[Dict, float]:
+    """بحث بسيط في Q/A باستخدام rapidfuzz فقط (بدون numpy)."""
+    if not QA:
+        return None, 0.0
+    qn = correct_spelling_ar(q)
+    best_doc, best_score = None, 0.0
+    for qa in QA:
         s = fuzz.token_set_ratio(qn, normalize_ar(qa["q"]))
-        if s > 0: scores[i] = scores.get(i, 0) + s
+        if s > best_score:
+            best_doc, best_score = qa, float(s)
+    return best_doc, best_score
 
-    # TF-IDF
-    if TFVEC:
-        q_vec = TFVEC.transform([qn])
-        cos = X_TFIDF @ q_vec.T
-        for i, s in enumerate(np.asarray(cos.todense()).ravel()):
-            if s > 0: scores[i] = scores.get(i, 0) + s * 120
 
-    if not scores: return None, 0
-    best = sorted(scores.items(), key=lambda x: x[1], reverse=True)[0]
-    return QA_CACHE[best[0]], best[1]
+# ———————————— بحث الويب + تلخيص ————————————
+def web_search(query: str, max_results: int = 6) -> List[Dict]:
+    results = []
+    with DDGS() as dd:
+        for r in dd.text(query, max_results=max_results):
+            # r يحتوي عادة: title, body, href
+            results.append({
+                "title": (r.get("title") or "").strip(),
+                "snippet": (r.get("body") or "").strip(),
+                "link": (r.get("href") or "").strip(),
+            })
+    return results
 
-# ==================== بحث الويب وصياغة الإجابة ====================
-async def web_answer(query: str, include_prices: bool = False, max_results: int = 6):
-    results = await web_search(query, max_results=max_results)
-    if not results:
-        return ("لم أجد نتائج مناسبة على الويب.", [])
-    payload = compose_answer_ar(query, results)
-    summary = payload.get("answer", "لم أستطع توليد ملخص واضح.")
-    links = payload.get("links", []) or [r.get("link","") for r in results if r.get("link")][:5]
-    if include_prices:
-        shop_q = f"{query} سعر"
-        links.insert(0, f"https://www.google.com/search?q={shop_q}")
-    return (summary, links[:5])
 
-# ==================== العقل المزدوج ====================
-@app.post("/search")
-async def search(req: Request):
-    body = await req.json()
-    q = body.get("q","").strip()
-    want_prices = body.get("want_prices", False)
-    dual = body.get("dual_mode", True)
+def _clean_lines(text: str, max_lines: int = 4) -> List[str]:
+    if not text:
+        return []
+    lines = [l.strip(" .\t\r\n") for l in text.splitlines()]
+    lines = [l for l in lines if 15 <= len(l) <= 220]
+    out, seen = [], set()
+    for l in lines:
+        if l in seen: 
+            continue
+        seen.add(l)
+        out.append(l)
+        if len(out) >= max_lines:
+            break
+    return out
 
+
+def compose_web_answer(question: str, results: List[Dict]) -> Dict:
+    bullets, links = [], []
+    for r in results[:6]:
+        t = r.get("title") or ""
+        s = r.get("snippet") or ""
+        u = r.get("link") or ""
+        if u:
+            links.append(u)
+        if 15 <= len(t) <= 140:
+            bullets.append(t.strip())
+        bullets.extend(_clean_lines(s, max_lines=2))
+
+    # إزالة التكرار
+    clean, seen = [], set()
+    for b in bullets:
+        if b and b not in seen:
+            seen.add(b)
+            clean.append(b)
+        if len(clean) >= 10:
+            break
+
+    if not clean:
+        return {
+            "answer": "بحثت في الويب لكن لم أجد نقاطًا واضحة كفاية. جرّب إعادة صياغة سؤالك.",
+            "links": links[:5]
+        }
+
+    head = f"سؤالك: {question}\n\nهذا ملخص مُنظم من عدة مصادر:\n"
+    body = "\n".join([f"• {b}" for b in clean])
+    tail = ""
+    if links:
+        tail = "\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])
+    return {"answer": head + body + tail, "links": links[:5]}
+
+
+# ———————————— الواجهة الموحدة ————————————
+def smart_answer(question: str) -> Tuple[str, Dict]:
+    q = (question or "").strip()
     if not q:
-        raise HTTPException(status_code=400, detail="يرجى إدخال سؤال.")
+        return "لم أستلم سؤالًا.", {"mode": "invalid"}
 
-    if dual:
-        local_task = asyncio.create_task(local_qa(q))
-        web_task = asyncio.create_task(web_answer(q, include_prices=want_prices))
-        local_ans, (web_ans, web_links) = await asyncio.gather(local_task, web_task)
-        return {"ok": True, "local": local_ans, "web": web_ans, "links": web_links}
+    # 1) قاعدة المعرفة
+    doc, score = local_search(q)
+    if doc and score >= 85:
+        # تطابق قوي
+        return doc["a"], {"mode": "local", "score": score, "match": doc["q"]}
 
-    ans, meta = await smart_answer(q)
-    return {"ok": True, "answer": ans, "meta": meta}
+    # 2) الويب
+    results = web_search(q, max_results=6)
+    if results:
+        pack = compose_web_answer(q, results)
+        return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
 
-# ==================== الذكاء المحلي ====================
-async def local_qa(q: str) -> str:
-    doc, score = combined_search(q)
-    if doc and score >= 140:
-        return doc["a"]
-    elif doc and score >= 90:
-        return f"{doc['a']}\n\n(ℹ️ أقرب سؤال كان: «{doc['q']}»)"
-    elif doc:
-        return f"لم أجد إجابة دقيقة، لكن الأقرب: {doc['q']} → {doc['a']}"
-    return "لم أجد إجابة في قاعدة المعرفة."
+    # 3) fallback
+    if doc:
+        return (
+            f"لم أجد إجابة مؤكدة. أقرب سؤال عندي:\n«{doc['q']}».\n"
+            f"الجواب المخزن: {doc['a']}\n\n"
+            "يمكنك حفظ إجابتك الخاصة في القاعدة لتحسين النتائج لاحقًا."
+        ), {"mode": "suggest", "score": score}
+    return "لا أملك معلومات كافية بعد. أضف س/ج مشابه في قاعدة المعرفة أو غيّر صياغة السؤال.", {"mode": "none"}
 
-# ==================== الصفحة التجريبية ====================
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <html><body style='font-family:Tahoma'>
-    <h2>🧠 Bassam Brain — العقل المزدوج</h2>
-    <form method='post' action='/search'>
-    <textarea name='q' rows='5' style='width:100%'></textarea><br>
-    <label><input type='checkbox' name='want_prices'/> روابط أسعار</label><br>
-    <button>بحث</button>
-    </form>
-    </body></html>
-    """
+
+def save_to_knowledge(q: str, a: str) -> None:
+    q = (q or "").strip()
+    a = (a or "").strip()
+    if not q or not a:
+        return
+    with KB_FILE.open("a", encoding="utf-8") as f:
+        f.write(f"\nسؤال: {q}\nجواب: {a}\n---\n")
