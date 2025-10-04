@@ -5,27 +5,26 @@ python-multipart==0.0.9
 
 # ==== أدوات الذكاء المحلي ====
 rapidfuzz==3.6.1
-rank-bm25==0.2.2
 
-# ==== الذكاء الاصطناعي الخفيف ====
+# ==== بحث/ويب ومكشطة ====
+duckduckgo_search==6.2.6
+httpx==0.27.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
+feedparser==6.0.11
+
+# ==== اختياري (لو كودك الأساسي يستخدمها سابقًا) ====
 numpy==1.24.4
 scikit-learn==1.3.0
-
-# ==== للاتصالات والويب ====
-httpx==0.27.0
-requests==2.31.0
-duckduckgo-search==5.3.1
-beautifulsoup4==4.12.3
+rank-bm25==0.2.2
 
 # ==== خادم التشغيل ====
 jinja2==3.1.3
 
 # ==== توافق عام ====
+requests==2.31.0
 certifi>=2023.7.22
 charset-normalizer>=3.3.0
 idna>=3.4
 urllib3>=2.0.7
-beautifulsoup4==4.12.3
-lxml==5.2.2
-feedparser==6.0.11
-webdrake
+deep>web
