@@ -1,98 +1,70 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>بسّام الذكي — العقل المزدوج</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
+  <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
-  <main class="container">
-    <header class="hero">
-      <h1>بسّام الذكي — <span>العقل المزدوج</span> 🤖</h1>
-      <p>يستقبل سؤالك ➜ يُحلّل ويصحّح إملائياً ➜ يبحث أولاً في القاعدة،
-         وإن لزم يبحث في الويب (Google &amp; Bing عبر DuckDuckGo) ➜
-         يُلخّص ويعرض <strong>مصادر قابلة للنقر</strong>.</p>
-    </header>
+<header>
+  <h1>🔍 بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
+</header>
 
-    <section class="card">
-      <form method="post" action="/ask" class="ask-form">
-        <label for="q">اكتب سؤالك هنا</label>
-        <textarea id="q" name="q" rows="3" placeholder="مثال: ما هي عاصمة ألمانيا؟ أو: اكتب عن الذكاء الاصطناعي...">{{ q }}</textarea>
+<section class="card">
+  <form id="searchForm">
+    <input id="q" placeholder="اكتب سؤالك هنا..."/>
+    <label><input type="checkbox" id="want_social"/> تفعيل البحث الاجتماعي (أسماء/حسابات)</label>
+    <button type="submit">إرسال</button>
+  </form>
+</section>
 
-        <!-- خيارات إضافية مستقبلًا: حفظ في القاعدة -->
-        <div class="inline">
-          <label class="switch">
-            <input type="checkbox" name="save_answer">
-            <span>حفظ هذه الإجابة في القاعدة لاحقًا</span>
-          </label>
-          <button type="submit" class="btn">إرسال</button>
-        </div>
+<section id="result" class="card" hidden>
+  <h3>الإجابة:</h3>
+  <div id="answer"></div>
+  <h4>المصادر:</h4>
+  <ul id="sources"></ul>
+  <div id="social"></div>
+</section>
 
-        <!-- تمرير آخر إجابة كي تُحفظ إن اختار المستخدم -->
-        <input type="hidden" name="last_answer" value="{{ ans or '' }}">
-      </form>
-    </section>
+<script>
+const form = document.getElementById("searchForm");
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = document.getElementById("q").value;
+  const want_social = document.getElementById("want_social").checked;
+  const resDiv = document.getElementById("result");
+  const ans = document.getElementById("answer");
+  const src = document.getElementById("sources");
+  const soc = document.getElementById("social");
 
-    {% if ans %}
-    <section class="card answer">
-      <h2>الإجابة</h2>
-      <pre class="bubble">{{ ans }}</pre>
+  ans.innerText = "⏳ جاري البحث...";
+  resDiv.hidden = false;
+  src.innerHTML = "";
+  soc.innerHTML = "";
 
-      {% if meta and meta.sources and meta.sources|length > 0 %}
-      <section class="card sources">
-        <h3>المصادر</h3>
-        <ul id="sources-list">
-          {% for s in meta.sources %}
-            <li class="source-item {% if loop.index > 5 %}hidden{% endif %}">
-              <a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>
-            </li>
-          {% endfor %}
-        </ul>
-        {% if meta.sources|length > 5 %}
-        <div class="sources-actions">
-          <button id="more-btn" class="btn-ghost">عرض المزيد</button>
-          <button id="less-btn" class="btn-ghost hidden">عرض أقل</button>
-        </div>
-        {% endif %}
-      </section>
-      {% endif %}
+  const res = await fetch("/search", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ q, want_social })
+  });
+  const data = await res.json();
 
-      <form method="post" action="/back">
-        <button class="btn-ghost">◀ رجوع</button>
-      </form>
+  if (!data.ok) { ans.innerText = "حدث خطأ: " + data.error; return; }
 
-      <div class="mode">mode: {{ meta.mode if meta else "n/a" }}</div>
-    </section>
-    {% endif %}
-  </main>
+  ans.innerText = data.answer;
+  data.sources.forEach(l => {
+    const li = document.createElement("li");
+    li.innerHTML = `<a href="${l}" target="_blank">${l}</a>`;
+    src.appendChild(li);
+  });
 
-  <script>
-  // تحكم في "عرض المزيد/أقل" للمصادر
-  (function(){
-    const list  = document.getElementById('sources-list');
-    if(!list) return;
-    const items = Array.from(list.querySelectorAll('.source-item'));
-    const more  = document.getElementById('more-btn');
-    const less  = document.getElementById('less-btn');
-    let shown = Math.min(5, items.length);
-    function showMore(n=5){
-      const end = Math.min(shown+n, items.length);
-      for(let i=shown;i<end;i++) items[i].classList.remove('hidden');
-      shown=end; updateBtns();
-    }
-    function showLess(){
-      items.forEach((li,i)=> li.classList.toggle('hidden', i>=5));
-      shown=Math.min(5,items.length); updateBtns();
-    }
-    function updateBtns(){
-      if(more) more.classList.toggle('hidden', shown>=items.length);
-      if(less) less.classList.toggle('hidden', shown<=5);
-    }
-    if(more) more.addEventListener('click', ()=>showMore(5));
-    if(less) less.addEventListener('click', showLess);
-    updateBtns();
-  })();
-  </script>
+  if (data.social && data.social.length > 0) {
+    soc.innerHTML = "<h4>بحث اجتماعي سريع:</h4><ul>" +
+      data.social.map(s => `<li><a href="${s.split(': ')[1]}" target="_blank">${s}</a></li>`).join('') +
+      "</ul>";
+  }
+});
+</script>
 </body>
 </html>
