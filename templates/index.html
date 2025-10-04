@@ -1,66 +1,37 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Bassam Brain — العقل المزدوج</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>بسام الذكي — العقل المزدوج</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    .bubble{white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere;}
+    .links a{color:#8ab4f8; text-decoration:underline;}
+  </style>
 </head>
 <body>
   <main class="container">
-    <header class="header">
-      <h1>🤖 بسّام الذكي — العقل المزدوج</h1>
-      <p class="subtitle">
-        يستقبل سؤالك ➜ يُحلّل ويصحّح إملائيًا ➜ يبحث في قاعدة المعرفة أولًا ➜
-        وإن لزم يبحث في الويب ➜ يُلخّص ويولّد إجابة عربية واضحة.
-      </p>
-    </header>
+    <h1>بسام الذكي 🤖</h1>
+    <p class="muted">يحلل سؤالك ➜ يوجّه البحث (Google → Bing → ويكيبيديا → DuckDuckGo) ➜ يلخّص عربيًا.</p>
 
-    <section class="card">
-      <form method="post" action="/ask" class="ask-form">
-        <label for="q" class="label">اكتب سؤالك هنا</label>
-        <textarea id="q" name="q" rows="5" placeholder="مثال: ما هي عاصمة فرنسا؟ أو: كيف أحسّن سرعة موقعي؟" required></textarea>
-        <button class="btn primary">إرسال</button>
-      </form>
-    </section>
+    <form method="post" action="/ask" class="card">
+      <label>اكتب سؤالك هنا</label>
+      <textarea name="q" rows="4" placeholder="مثال: ما هي عاصمة ألمانيا؟ أو: ابحث عن حساب &quot;فلان&quot; على تويتر"></textarea>
+      <label class="row" style="gap:.6rem;">
+        <input type="checkbox" name="social" value="1"> تفعيل البحث الاجتماعي (أسماء/حسابات)
+      </label>
+      <button type="submit">إرسال</button>
+    </form>
 
-    {% if last_q %}
-    <section class="card">
-      <h2 class="section-title">نتيجة آخر سؤال</h2>
-      <p class="q"><b>سؤالك:</b> {{ last_q }}</p>
-      <div class="a">
-        <b>الإجابة:</b>
-        <div class="answer-block">
-          {{ last_a | replace('\n','<br>') | safe }}
-        </div>
-      </div>
-
-      {% if links and links|length > 0 %}
-      <div class="links">
-        <div class="links-title">روابط مفيدة:</div>
-        <ul>
-          {% for u in links %}
-          <li><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></li>
-          {% endfor %}
-        </ul>
-      </div>
+    {% if answer %}
+    <section class="card bubble">
+      <div class="answer">{{ answer }}</div>
+      {% if meta %}
+      <div class="muted">mode: {{ meta.mode }}</div>
       {% endif %}
-
-      <details class="save-details">
-        <summary>حفظ هذا السؤال/الجواب في قاعدة المعرفة</summary>
-        <form method="post" action="/save" class="save-form">
-          <input type="hidden" name="q" value="{{ last_q }}"/>
-          <textarea name="a" rows="3" placeholder="يمكنك تعديل الإجابة قبل حفظها...">{{ last_a }}</textarea>
-          <button class="btn success">✅ حفظ في قاعدة المعرفة</button>
-        </form>
-      </details>
     </section>
     {% endif %}
-
-    <footer class="footer">
-      <span>© Bassam Brain</span>
-      <a class="muted" href="/ready" target="_blank" rel="noopener">حالة النظام</a>
-    </footer>
   </main>
 </body>
 </html>
