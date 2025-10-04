@@ -1,65 +1,123 @@
-# ==== Bassam Brain — العقل المزدوج (نسخة قوية) ====
+# app.py — Bassam Brain (واجهة مع وضع "بحث السوشيال" اليدوي)
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+import json, time
 
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import traceback
-from core.brain import smart_answer
+# نستورد دوال العقل
+from core.brain import (
+    smart_answer,             # يقرر أوتوماتيك: ويب عام أو سوشيال حسب السؤال
+    is_social_query,          # كاشف أسئلة السوشيال
+    search_social,            # بحث سوشيال مباشر
+    compose_social_answer,    # تركيب جواب السوشيال
+    web_search_pipeline,      # خط بحث الويب العام
+    compose_web_answer        # تركيب جواب الويب العام
+)
 
-app = FastAPI(title="Bassam Brain — AI العقل المزدوج")
+app = FastAPI(title="Bassam Brain — Web + Social")
 
-# ربط مجلد الستايل والقوالب
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
-
+# ================== الصفحة الرئيسية ==================
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+def home():
+    return """
+    <div style="max-width:820px;margin:24px auto;font-family:system-ui;line-height:1.5">
+      <h1>🤖 Bassam Brain — بحث ويب + سوشيال</h1>
+      <p>اختر: بحث عام أو فعّل <b>وضع السوشيال</b> للبحث عن الحسابات في المنصات.</p>
 
+      <form method="post" action="/ask" style="margin-top:12px">
+        <textarea name="q" rows="5" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ddd"
+          placeholder="اكتب سؤالك هنا… مثال: ما عاصمة ألمانيا؟ أو: ابحث عن حساب محمد صالح على تويتر وانستغرام"></textarea>
 
-@app.post("/ask", response_class=HTMLResponse)
-async def ask(request: Request, q: str = Form(...)):
-    try:
-        # تشغيل العقل الذكي
-        ans, meta = smart_answer(q)
+        <label style="display:flex;gap:10px;align-items:center;margin-top:10px">
+          <input type="checkbox" name="social_mode">
+          <span>تفعيل وضع السوشيال (Twitter/X, Instagram, Facebook, YouTube, TikTok, LinkedIn, Telegram, Reddit)</span>
+        </label>
 
-        # تنسيق النتيجة في فقاعة أنيقة
-        html = _render_result(q, ans, meta)
-        return HTMLResponse(html)
+        <div style="margin-top:10px">
+          <button style="background:#0d6efd;color:white;padding:10px 18px;border:none;border-radius:8px;cursor:pointer">
+            إرسال
+          </button>
+        </div>
+      </form>
 
-    except Exception as e:
-        traceback.print_exc()
-        return HTMLResponse(f"<b>حدث خطأ:</b><br>{e}", status_code=500)
-
-
-def _render_result(question: str, answer: str, meta: dict) -> str:
-    """تنسيق الإجابة في فقاعة مرتبة وجميلة"""
-    links_html = ""
-    if meta.get("links"):
-        links_html = "\n".join([f"🔗 <a href='{u}' target='_blank'>{u}</a>" for u in meta["links"]])
-
-    pretty = (answer or "").strip()
-    # ✅ إصلاح مشكلة الباك سلاش داخل f-string
-    pretty_html = (
-        pretty.replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\n", "<br>")
-    )
-
-    # ✅ الشكل النهائي لعرض الجواب
-    return f"""
-    <div style="background:#111827;color:#e5e7eb;border-radius:12px;padding:15px;margin:10px;font-size:17px;line-height:1.6;">
-      <b style='color:#38bdf8;'>سؤالك:</b> {question}<br><br>
-      <b style='color:#34d399;'>الجواب:</b><br>{pretty_html}<br>
-      {'<hr style="border:0.5px solid #333;margin:10px 0;">'+links_html if links_html else ''}
-      <div style='font-size:13px;color:#9ca3af;margin-top:6px;'>🧠 الوضع: {meta.get('mode','web')}</div>
+      <details style="margin-top:18px">
+        <summary>كيف يعمل؟</summary>
+        <ul>
+          <li>الوضع الافتراضي: Google → Wikipedia → Deep Web (Ahmia + CommonCrawl) → Bing → DuckDuckGo</li>
+          <li>وضع السوشيال: يبحث في المنصات العامة عبر محركات البحث ويعرض روابط الحسابات/الملفات ذات الصلة.</li>
+        </ul>
+      </details>
     </div>
     """
 
+# ================== معالجة النموذج ==================
+@app.post("/ask", response_class=HTMLResponse)
+async def ask(request: Request):
+    form = await request.form()
+    q         = (form.get("q") or "").strip()
+    social_on = bool(form.get("social_mode"))
 
-# ✅ لتشغيل السيرفر في Render أو محلي
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    if not q:
+        return "<p>⚠️ الرجاء كتابة سؤال.</p><p><a href='/'>◀ رجوع</a></p>"
+
+    # إذا فعّل المستخدم وضع السوشيال، نجبر المسار السوشيالي
+    if social_on:
+        results = search_social(q, max_per_platform=3)
+        pack    = compose_social_answer(q, results)
+        answer  = pack["answer"]
+        links   = pack.get("links", [])
+        mode    = "social-forced"
+    else:
+        # نترك العقل يقرر — ولو السؤال أصلاً اجتماعي، سيحوّل تلقائيًا
+        answer, meta = smart_answer(q)
+        links = meta.get("links", []) if isinstance(meta, dict) else []
+        mode  = meta.get("mode", "web") if isinstance(meta, dict) else "web"
+
+    # تنسيق روابط
+    links_html = ""
+    if links:
+        items = "".join([f"<li><a href='{u}' target='_blank' rel='noopener'>{u}</a></li>" for u in links])
+        links_html = f"<h3>روابط:</h3><ul>{items}</ul>"
+
+    # واجهة النتيجة
+    html = f"""
+    <div style='max-width:820px;margin:24px auto;font-family:system-ui;line-height:1.6'>
+      <p><b>🧠 سؤالك:</b> {q}</p>
+      <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:10px;padding:14px;white-space:pre-wrap">
+        {answer}
+      </div>
+      {links_html}
+      <p style='margin-top:16px'><a href='/'>◀ رجوع</a></p>
+      <p style="color:#6c757d">mode: {mode}</p>
+    </div>
+    """
+    return html
+
+# ================== JSON API ==================
+@app.post("/api/answer")
+async def api_answer(req: Request):
+    body = await req.json()
+    q    = (body.get("question") or "").strip()
+    force_social = bool(body.get("social", False))
+
+    if not q:
+        raise HTTPException(status_code=400, detail="ضع حقل 'question'")
+
+    if force_social:
+        results = search_social(q, max_per_platform=3)
+        pack    = compose_social_answer(q, results)
+        return {"ok": True, "mode": "social-forced", "answer": pack["answer"], "links": pack.get("links", [])}
+
+    # autodetect
+    if is_social_query(q):
+        results = search_social(q, max_per_platform=3)
+        pack    = compose_social_answer(q, results)
+        return {"ok": True, "mode": "social", "answer": pack["answer"], "links": pack.get("links", [])}
+
+    results = web_search_pipeline(q, max_results=8)
+    pack    = compose_web_answer(q, results)
+    return {"ok": True, "mode": "web", "answer": pack["answer"], "links": pack.get("links", [])}
+
+# صحة الخدمة
+@app.get("/ready")
+def ready():
+    return {"ok": True}
