@@ -1,8 +1,20 @@
-body { font-family: system-ui, Tahoma; background:#0b0f19; color:#eaeef8; margin:0; padding:16px; }
-h1 { text-align:center; }
-.card { background:#141b2d; border-radius:12px; padding:16px; margin:10px auto; max-width:600px; box-shadow:0 0 5px #222; }
-input[type=text], input[type=checkbox] { margin:5px; }
-button { background:#007bff; color:white; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; }
-button:hover { background:#005dc1; }
-a { color:#5db1ff; text-decoration:none; }
-a:hover { text-decoration:underline; }
+body {
+  font-family: "Tahoma", system-ui;
+  background: #0b0f19;
+  color: #fff;
+  padding: 20px;
+  text-align: center;
+}
+h1 { color: #6cf; }
+form { margin: 20px auto; max-width: 400px; }
+input[type=text] {
+  width: 100%; padding: 10px;
+  border-radius: 8px; border: none; margin: 8px 0;
+}
+button {
+  background: #1a73e8; color: #fff; border: none;
+  border-radius: 6px; padding: 10px 20px;
+}
+ul { list-style: none; padding: 0; }
+li { margin: 5px 0; }
+a { color: #6cf; text-decoration: none; }
