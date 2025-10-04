@@ -1,16 +1,19 @@
-# core/compose_answer.py — توليد إجابة من نتائج الويب
+# core/compose_answer.py
 from typing import List, Dict
 
 def _pick_clean_lines(text: str, max_lines: int = 6) -> List[str]:
+    if not text:
+        return []
     lines = [l.strip(" .\t\r\n") for l in text.splitlines()]
     lines = [l for l in lines if 15 <= len(l) <= 220]
     seen, uniq = set(), []
     for l in lines:
-        if l not in seen:
-            seen.add(l)
-            uniq.append(l)
-            if len(uniq) >= max_lines:
-                break
+        if l in seen:
+            continue
+        seen.add(l)
+        uniq.append(l)
+        if len(uniq) >= max_lines:
+            break
     return uniq
 
 def compose_answer_ar(question: str, results: List[Dict]) -> Dict:
@@ -19,20 +22,24 @@ def compose_answer_ar(question: str, results: List[Dict]) -> Dict:
         snip = (r.get("snippet") or "").strip()
         title = (r.get("title") or "").strip()
         link = (r.get("link") or "").strip()
-        if link: links.append(link)
+        if link:
+            links.append(link)
         if title and 15 <= len(title) <= 140:
             bullets.append(title)
         bullets.extend(_pick_clean_lines(snip, max_lines=3))
-    clean = []
-    seen = set()
+
+    seen, clean = set(), []
     for b in bullets:
-        if b not in seen:
+        if b and b not in seen:
             seen.add(b)
             clean.append(b)
-            if len(clean) >= 8:
-                break
+        if len(clean) >= 8:
+            break
+
     if not clean:
-        return {"answer": "لم أجد نقاطًا واضحة من الويب، جرّب إعادة صياغة السؤال.", "links": links[:5]}
+        return {"answer": "لم أجد نقاطًا واضحة، جرّب إعادة صياغة سؤالك.", "links": links[:5]}
+
+    header = f"سؤالك: {question}\n\nملخص ذكي من الويب:\n"
     body = "\n".join([f"• {b}" for b in clean])
-    tail = "\n\n📚 روابط مفيدة:\n" + "\n".join([f"- {u}" for u in links[:5]]) if links else ""
-    return {"answer": f"سؤالك: {question}\n\nهذا ملخّص من الويب:\n{body}{tail}", "links": links[:5]}
+    tail = "\n\nروابط للمزيد:\n" + "\n".join([f"- {u}" for u in links[:5]])
+    return {"answer": header + body + tail, "links": links[:5]}
