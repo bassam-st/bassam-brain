@@ -153,3 +153,44 @@ def save_to_knowledge(q: str, a: str) -> None:
     if not q or not a: return
     with KB_FILE.open("a", encoding="utf-8") as f:
         f.write(f"\nسؤال: {q}\nجواب: {a}\n---\n")
+        # === روابط بحث اجتماعي مُهيكلة + مرشّحات للتعليقات/الردود إن أمكن ===
+from urllib.parse import quote_plus
+
+def build_social_links(name: str):
+    q = quote_plus(name.strip())
+    links = [
+        # محرّكات عامة (مفيدة لاكتشاف مشاركات وتعليقات بالـ site:)
+        {"platform": "Google (واسع)", "url": f"https://www.google.com/search?q={q}"},
+        {"platform": "Bing",           "url": f"https://www.bing.com/search?q={q}"},
+
+        # Twitter/X — فلاتر مباشرة
+        {"platform": "Twitter/X (حسابات)",  "url": f"https://twitter.com/search?q={q}&f=user"},
+        {"platform": "Twitter/X (التغريدات)", "url": f"https://twitter.com/search?q={q}&f=top"},
+        {"platform": "Twitter/X (الردود≈تعليقات)", "url": f"https://twitter.com/search?q={q}%20filter%3Areplies&f=live"},
+
+        # Facebook/Instagram—لا يوجد بحث تعليقات عام؛ نستعمل Google site:
+        {"platform": "Facebook (بالـ site:)",  "url": f"https://www.google.com/search?q=site%3Afacebook.com+{q}"},
+        {"platform": "Instagram (بالـ site:)", "url": f"https://www.google.com/search?q=site%3Ainstagram.com+{q}"},
+
+        # TikTok — بحث مستخدمين/مقاطع (لا يوجد تعليقات عام)
+        {"platform": "TikTok (مستخدمين)", "url": f"https://www.tiktok.com/search/user?q={q}"},
+        {"platform": "TikTok (فيديوهات)", "url": f"https://www.tiktok.com/search?q={q}"},
+
+        # LinkedIn (People)
+        {"platform": "LinkedIn (أشخاص)", "url": f"https://www.linkedin.com/search/results/people/?keywords={q}"},
+
+        # Telegram — البحث في قنوات عامة /s/
+        {"platform": "Telegram (قنوات عامة)", "url": f"https://t.me/s/{q}"},
+
+        # Reddit — يمكن تصفية نوع النتيجة لتعليقات
+        {"platform": "Reddit (منشورات)", "url": f"https://www.reddit.com/search/?q={q}"},
+        {"platform": "Reddit (تعليقات)", "url": f"https://www.reddit.com/search/?q={q}&type=comment"},
+
+        # YouTube — لا API للتعليقات علنًا؛ نستعمل بحث Google
+        {"platform": "YouTube (فيديوهات)", "url": f"https://www.youtube.com/results?search_query={q}"},
+        {"platform": "YouTube (بالـ site: + تعليقات)", "url": f"https://www.google.com/search?q=site%3Ayoutube.com+{q}+comments"},
+
+        # Wikipedia (تعريفات سريعة للأسماء)
+        {"platform": "Wikipedia", "url": f"https://ar.wikipedia.org/w/index.php?search={q}"}
+    ]
+    return links
