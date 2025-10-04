@@ -1,72 +1,38 @@
-# core/compose_answer.py
-# تركيب إجابة عربية نظيفة من خلاصات الويب + إرجاع روابط للاستشهاد
-
+# core/compose_answer.py — توليد إجابة من نتائج الويب
 from typing import List, Dict
 
 def _pick_clean_lines(text: str, max_lines: int = 6) -> List[str]:
-    """اختيار أسطر موجزة ومفيدة من النص."""
-    if not text:
-        return []
     lines = [l.strip(" .\t\r\n") for l in text.splitlines()]
-    # تخلّص من الأسطر القصيرة جدًا أو الطويلة جدًا
     lines = [l for l in lines if 15 <= len(l) <= 220]
-    # إزالة المكررات مع الحفاظ على الترتيب
-    seen = set()
-    uniq = []
+    seen, uniq = set(), []
     for l in lines:
-        if l in seen:
-            continue
-        seen.add(l)
-        uniq.append(l)
-        if len(uniq) >= max_lines:
-            break
+        if l not in seen:
+            seen.add(l)
+            uniq.append(l)
+            if len(uniq) >= max_lines:
+                break
     return uniq
 
 def compose_answer_ar(question: str, results: List[Dict]) -> Dict:
-    """
-    يأخذ السؤال + نتائج الويب (كل نتيجة: title, snippet, link)
-    ويُرجع: {"answer": نص, "links": [روابط...]}
-    """
-    # اجمع أفضل الخلاصات
-    bullets: List[str] = []
-    links: List[str] = []
-
+    bullets, links = [], []
     for r in results[:6]:
         snip = (r.get("snippet") or "").strip()
         title = (r.get("title") or "").strip()
         link = (r.get("link") or "").strip()
-
-        if link:
-            links.append(link)
-        # حاول استخدام العنوان كجملة أولى إذا كان واضحًا
+        if link: links.append(link)
         if title and 15 <= len(title) <= 140:
             bullets.append(title)
         bullets.extend(_pick_clean_lines(snip, max_lines=3))
-
-    # احذف المكرر وقلّم
-    seen = set()
     clean = []
+    seen = set()
     for b in bullets:
-        if b and b not in seen:
+        if b not in seen:
             seen.add(b)
             clean.append(b)
-        if len(clean) >= 8:  # لا نطوّل
-            break
-
+            if len(clean) >= 8:
+                break
     if not clean:
-        return {
-            "answer": "جمعت نتائج من الويب لكن لم أستخرج نقاطًا واضحة بما يكفي. جرّب إعادة صياغة سؤالك.",
-            "links": links[:5],
-        }
-
-    # صياغة نهائية ودّية مع نقاط واضحة
-    header = f"سؤالك: {question}\n\nهذا ملخّص مُنظّم من مصادر الويب:\n"
+        return {"answer": "لم أجد نقاطًا واضحة من الويب، جرّب إعادة صياغة السؤال.", "links": links[:5]}
     body = "\n".join([f"• {b}" for b in clean])
-    tail = ""
-    if links:
-        tail = "\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])
-
-    return {
-        "answer": header + body + tail,
-        "links": links[:5],
-    }
+    tail = "\n\n📚 روابط مفيدة:\n" + "\n".join([f"- {u}" for u in links[:5]]) if links else ""
+    return {"answer": f"سؤالك: {question}\n\nهذا ملخّص من الويب:\n{body}{tail}", "links": links[:5]}
