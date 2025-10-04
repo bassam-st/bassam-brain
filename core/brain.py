@@ -67,3 +67,34 @@ async def smart_search(q: str, want_social=False):
         "sources": results[:10],
         "social": social_links
     }
+# ✅ دالة ذكية شاملة للإجابة — تستخدم البحث والتحليل
+async def smart_answer(query: str):
+    """
+    هذه الدالة مسؤولة عن تنفيذ البحث الذكي الكامل:
+    1. تبحث في الويب (Google، Bing، Deep Web...)
+    2. تبحث في ويكيبيديا والمصادر العربية.
+    3. تبحث في السوشال ميديا إن كان الاسم شخصاً.
+    4. ترجع إجابة ذكية + روابط المصادر.
+    """
+    from core.search import deep_search  # تأكد أن هذا موجود في مشروعك
+    result = await deep_search(query)
+    return result
+
+
+# ✅ لتخزين المعرفة محلياً (اختياري)
+def save_to_knowledge(question: str, answer: str):
+    """
+    تخزن السؤال والإجابة في ملف knowledge.json المحلي.
+    """
+    import json, os
+    path = "knowledge.json"
+    data = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except:
+                data = []
+    data.append({"question": question, "answer": answer})
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
