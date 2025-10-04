@@ -1,37 +1,98 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>بسام الذكي — العقل المزدوج</title>
-  <link rel="stylesheet" href="/static/style.css"/>
-  <style>
-    .bubble{white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere;}
-    .links a{color:#8ab4f8; text-decoration:underline;}
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>بسّام الذكي — العقل المزدوج</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="container">
-    <h1>بسام الذكي 🤖</h1>
-    <p class="muted">يحلل سؤالك ➜ يوجّه البحث (Google → Bing → ويكيبيديا → DuckDuckGo) ➜ يلخّص عربيًا.</p>
+    <header class="hero">
+      <h1>بسّام الذكي — <span>العقل المزدوج</span> 🤖</h1>
+      <p>يستقبل سؤالك ➜ يُحلّل ويصحّح إملائياً ➜ يبحث أولاً في القاعدة،
+         وإن لزم يبحث في الويب (Google &amp; Bing عبر DuckDuckGo) ➜
+         يُلخّص ويعرض <strong>مصادر قابلة للنقر</strong>.</p>
+    </header>
 
-    <form method="post" action="/ask" class="card">
-      <label>اكتب سؤالك هنا</label>
-      <textarea name="q" rows="4" placeholder="مثال: ما هي عاصمة ألمانيا؟ أو: ابحث عن حساب &quot;فلان&quot; على تويتر"></textarea>
-      <label class="row" style="gap:.6rem;">
-        <input type="checkbox" name="social" value="1"> تفعيل البحث الاجتماعي (أسماء/حسابات)
-      </label>
-      <button type="submit">إرسال</button>
-    </form>
+    <section class="card">
+      <form method="post" action="/ask" class="ask-form">
+        <label for="q">اكتب سؤالك هنا</label>
+        <textarea id="q" name="q" rows="3" placeholder="مثال: ما هي عاصمة ألمانيا؟ أو: اكتب عن الذكاء الاصطناعي...">{{ q }}</textarea>
 
-    {% if answer %}
-    <section class="card bubble">
-      <div class="answer">{{ answer }}</div>
-      {% if meta %}
-      <div class="muted">mode: {{ meta.mode }}</div>
+        <!-- خيارات إضافية مستقبلًا: حفظ في القاعدة -->
+        <div class="inline">
+          <label class="switch">
+            <input type="checkbox" name="save_answer">
+            <span>حفظ هذه الإجابة في القاعدة لاحقًا</span>
+          </label>
+          <button type="submit" class="btn">إرسال</button>
+        </div>
+
+        <!-- تمرير آخر إجابة كي تُحفظ إن اختار المستخدم -->
+        <input type="hidden" name="last_answer" value="{{ ans or '' }}">
+      </form>
+    </section>
+
+    {% if ans %}
+    <section class="card answer">
+      <h2>الإجابة</h2>
+      <pre class="bubble">{{ ans }}</pre>
+
+      {% if meta and meta.sources and meta.sources|length > 0 %}
+      <section class="card sources">
+        <h3>المصادر</h3>
+        <ul id="sources-list">
+          {% for s in meta.sources %}
+            <li class="source-item {% if loop.index > 5 %}hidden{% endif %}">
+              <a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>
+            </li>
+          {% endfor %}
+        </ul>
+        {% if meta.sources|length > 5 %}
+        <div class="sources-actions">
+          <button id="more-btn" class="btn-ghost">عرض المزيد</button>
+          <button id="less-btn" class="btn-ghost hidden">عرض أقل</button>
+        </div>
+        {% endif %}
+      </section>
       {% endif %}
+
+      <form method="post" action="/back">
+        <button class="btn-ghost">◀ رجوع</button>
+      </form>
+
+      <div class="mode">mode: {{ meta.mode if meta else "n/a" }}</div>
     </section>
     {% endif %}
   </main>
+
+  <script>
+  // تحكم في "عرض المزيد/أقل" للمصادر
+  (function(){
+    const list  = document.getElementById('sources-list');
+    if(!list) return;
+    const items = Array.from(list.querySelectorAll('.source-item'));
+    const more  = document.getElementById('more-btn');
+    const less  = document.getElementById('less-btn');
+    let shown = Math.min(5, items.length);
+    function showMore(n=5){
+      const end = Math.min(shown+n, items.length);
+      for(let i=shown;i<end;i++) items[i].classList.remove('hidden');
+      shown=end; updateBtns();
+    }
+    function showLess(){
+      items.forEach((li,i)=> li.classList.toggle('hidden', i>=5));
+      shown=Math.min(5,items.length); updateBtns();
+    }
+    function updateBtns(){
+      if(more) more.classList.toggle('hidden', shown>=items.length);
+      if(less) less.classList.toggle('hidden', shown<=5);
+    }
+    if(more) more.addEventListener('click', ()=>showMore(5));
+    if(less) less.addEventListener('click', showLess);
+    updateBtns();
+  })();
+  </script>
 </body>
 </html>
