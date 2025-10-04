@@ -3,68 +3,53 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
+  <title>بسام الذكي 🔍 — بحث عميق وتلخيص تلقائي</title>
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
-<header>
-  <h1>🔍 بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
-</header>
+  <h1>🤖 بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
 
-<section class="card">
-  <form id="searchForm">
-    <input id="q" placeholder="اكتب سؤالك هنا..."/>
-    <label><input type="checkbox" id="want_social"/> تفعيل البحث الاجتماعي (أسماء/حسابات)</label>
+  <form id="ask-form" method="post" action="/search">
+    <label>
+      <input type="checkbox" name="enable_social"> تفعيل البحث الاجتماعي (أسماء/حسابات)
+    </label><br>
+    <input type="text" name="q" placeholder="اكتب سؤالك أو الاسم للبحث..." required>
     <button type="submit">إرسال</button>
   </form>
-</section>
 
-<section id="result" class="card" hidden>
-  <h3>الإجابة:</h3>
+  <hr>
+  <h2>الإجابة:</h2>
   <div id="answer"></div>
-  <h4>المصادر:</h4>
+
+  <h3>المصادر:</h3>
   <ul id="sources"></ul>
-  <div id="social"></div>
-</section>
 
-<script>
-const form = document.getElementById("searchForm");
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const q = document.getElementById("q").value;
-  const want_social = document.getElementById("want_social").checked;
-  const resDiv = document.getElementById("result");
-  const ans = document.getElementById("answer");
-  const src = document.getElementById("sources");
-  const soc = document.getElementById("social");
+  <script>
+  document.getElementById('ask-form').addEventListener('submit', async (ev)=>{
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    const res = await fetch('/search', {method:'POST', body:fd});
+    const data = await res.json();
+    const ans = document.getElementById('answer');
+    const src = document.getElementById('sources');
+    ans.innerHTML = ''; src.innerHTML = '';
 
-  ans.innerText = "⏳ جاري البحث...";
-  resDiv.hidden = false;
-  src.innerHTML = "";
-  soc.innerHTML = "";
+    if(!data.ok){
+      ans.innerHTML = '<b style="color:red;">حدث خطأ:</b> '+(data.error || 'غير معروف');
+      return;
+    }
 
-  const res = await fetch("/search", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ q, want_social })
+    ans.innerHTML = data.answer || 'لا توجد إجابة.';
+
+    if(data.sources && data.sources.length){
+      data.sources.forEach(link=>{
+        const li=document.createElement('li');
+        const a=document.createElement('a');
+        a.href=link; a.target='_blank'; a.textContent=link;
+        li.appendChild(a); src.appendChild(li);
+      });
+    }
   });
-  const data = await res.json();
-
-  if (!data.ok) { ans.innerText = "حدث خطأ: " + data.error; return; }
-
-  ans.innerText = data.answer;
-  data.sources.forEach(l => {
-    const li = document.createElement("li");
-    li.innerHTML = `<a href="${l}" target="_blank">${l}</a>`;
-    src.appendChild(li);
-  });
-
-  if (data.social && data.social.length > 0) {
-    soc.innerHTML = "<h4>بحث اجتماعي سريع:</h4><ul>" +
-      data.social.map(s => `<li><a href="${s.split(': ')[1]}" target="_blank">${s}</a></li>`).join('') +
-      "</ul>";
-  }
-});
-</script>
+  </script>
 </body>
 </html>
