@@ -1,10 +1,31 @@
-:root{color-scheme:dark;}
-body{font-family:system-ui,Segoe UI,Tahoma; background:#0b1220; color:#e6ebf5; margin:0}
-.container{max-width:900px; margin:2rem auto; padding:0 1rem}
-h1{margin:.5rem 0 0.25rem}
-.muted{color:#9fb0c8; font-size:.95rem}
-.card{background:#111a2b; border:1px solid #1e2a43; border-radius:14px; padding:1rem; margin-top:1rem}
-textarea{width:100%; background:#0e1626; color:#fff; border:1px solid #233255; border-radius:10px; padding:.75rem}
-button{background:#3b82f6; color:#fff; border:0; border-radius:10px; padding:.6rem 1rem; cursor:pointer}
-.row{display:flex; align-items:center}
-.answer a{color:#8ab4f8}
+:root{
+  --bg:#0b1324; --card:#0f1a31; --text:#dfe7ff; --muted:#9fb3ff;
+  --accent:#2f6df6; --line:#22345a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans Arabic",Tahoma}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.hero h1{margin:.3rem 0 0;font-weight:800}
+.hero h1 span{color:var(--muted)}
+.hero p{opacity:.9;line-height:1.8}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0}
+.ask-form textarea{width:100%;resize:vertical;border-radius:12px;border:1px solid var(--line);background:#0c162a;color:var(--text);padding:12px}
+.inline{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:10px}
+.switch input{vertical-align:middle;margin-left:.4rem}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:.6rem 1rem;cursor:pointer}
+.btn:hover{filter:brightness(1.05)}
+.btn-ghost{background:transparent;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:.5rem .9rem;cursor:pointer}
+.btn-ghost:hover{background:#111c36}
+
+.answer h2{margin:.2rem 0 .8rem}
+.bubble{white-space:pre-wrap;background:#0c162a;border:1px solid var(--line);border-radius:12px;padding:12px;line-height:1.9}
+
+.sources h3{margin:.2rem 0 .6rem;font-size:1.05rem;color:#e8eefc}
+.sources ul{list-style:none;margin:0;padding:0}
+.source-item{padding:.5rem .6rem;margin:.35rem 0;border:1px solid #233255;border-radius:10px;background:#0e1626}
+.source-item a{color:#8ab4f8;text-decoration:underline;display:inline-block;max-width:100%;overflow-wrap:anywhere}
+.sources-actions{display:flex;gap:.5rem;margin-top:.5rem}
+.hidden{display:none}
+
+.mode{opacity:.6;font-size:.9rem;margin-top:.7rem}
