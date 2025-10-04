@@ -1,34 +1,46 @@
-# app.py — Bassam الذكي (النسخة الاحترافية الكاملة)
-import os, traceback
+# app.py
+# =========================================================
+# FastAPI + Jinja2 — واجهة تطبيق "بسام الذكي"
+# =========================================================
+
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from core.brain import smart_answer  # العقل الذكي (البحث والتلخيص)
+from fastapi.middleware.cors import CORSMiddleware
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import asyncio
 
-app = FastAPI(title="بسام الذكي — بحث عميق وتلخيص تلقائي")
+from core.brain import smart_answer
 
-# المسارات الثابتة
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app = FastAPI(title="Bassam Brain Pro v3.5", version="3.5")
 
-# الصفحة الرئيسية
+# السماح بواجهة المتصفح
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+# القوالب
+env = Environment(
+    loader=FileSystemLoader("templates"),
+    autoescape=select_autoescape(["html", "xml"])
+)
+
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def index():
+    tpl = env.get_template("index.html")
+    return tpl.render()
 
-# نقطة البحث الرئيسية
 @app.post("/search")
-async def search(q: str = Form(...), enable_social: bool = Form(False)):
+async def search(q: str = Form(...), social: str = Form("off")):
     try:
-        result = smart_answer(q, enable_social)
-        return JSONResponse(result)
+        force_social = (social == "on")
+        data = await smart_answer(q.strip(), force_social=force_social)
+        return JSONResponse(data)
     except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({
-            "ok": False,
-            "answer": "",
-            "sources": [],
-            "mode": "error",
-            "error": str(e)
-        }, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=422)
+
+# ملاحظة: لا تنشئ main.py — مدخل التشغيل هو app:app
+# أمر التشغيل على Render:
+# uvicorn app:app --host 0.0.0.0 --port $PORT
