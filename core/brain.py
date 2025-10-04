@@ -1,9 +1,10 @@
 # core/brain.py
-# Bassam Brain Deep+ — بحث ويب ذكي بالترتيب:
-# Google -> Wikipedia -> Deep Web (Ahmia + CommonCrawl) -> Bing -> DuckDuckGo
-# يعمل بدون TOR وبلا مفاتيح مدفوعة، جاهز لـ Render Starter.
+# Bassam Brain Deep+ with Social Search
+# ترتيب البحث العام: Google -> Wikipedia -> Deep (Ahmia + CommonCrawl) -> Bing -> DuckDuckGo
+# في حالة طلب اسم/حساب سوشيال: نستخدم بحث مخصص لمنصات التواصل
+# يعمل في Render Starter، وبدون مفاتيح مدفوعة
 
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import re, json
 import httpx
 from bs4 import BeautifulSoup
@@ -21,7 +22,7 @@ def _clean_text(s: str) -> str:
     if not s:
         return ""
     s = re.sub(r"\s+", " ", s).strip()
-    s = re.sub(r"\u200f|\u200e", "", s)  # RTL/LTR markers
+    s = re.sub(r"[\u200f\u200e]", "", s)  # RTL/LTR marks
     return s
 
 def _dedupe_keep_order(items: List[str], limit: int) -> List[str]:
@@ -105,9 +106,7 @@ def search_wikipedia(query: str, max_results: int = 6) -> List[Dict]:
     return out
 
 # ====================== Deep Web (Ahmia) ======================
-# Ahmia يوفر واجهة فهرسة قانونية لنتائج .onion (تُعرض عبر ahmia.fi بواجهات clearnet)
 def search_ahmia(query: str, max_results: int = 6) -> List[Dict]:
-    # API غير موثق بالكامل؛ نستعمل صفحة البحث كـ HTML ونستخرج النتائج القانونية الظاهرة
     url = "https://ahmia.fi/search/"
     params = {"q": query}
     out = []
@@ -116,13 +115,12 @@ def search_ahmia(query: str, max_results: int = 6) -> List[Dict]:
             r = c.get(url, params=params)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "lxml")
+            # روابط ظاهرة على الويب (clearnet) تُشير لمحتوى مفهرس لديهم
             for res in soup.select("div#results h4 a"):
                 title = _clean_text(res.get_text(" ", strip=True))
                 link = (res.get("href") or "").strip()
-                # نفلتر أي روابط غير مفيدة، ونبقي ما يمكن فتحه في clearnet/أرشيف
                 if not link:
                     continue
-                # مقتطف بسيط:
                 par = soup.find("p")
                 snippet = _clean_text(par.get_text(" ", strip=True)) if par else ""
                 item = _norm_result({"title": title, "snippet": snippet, "link": link})
@@ -135,10 +133,7 @@ def search_ahmia(query: str, max_results: int = 6) -> List[Dict]:
     return out
 
 # ====================== Deep Web (CommonCrawl Index) ======================
-# نستخدم واجهة CC Index البسيطة للعثور على صفحات مؤرشفة قد لا تظهر في محركات البحث العادية
 def search_commoncrawl(query: str, max_results: int = 6) -> List[Dict]:
-    # أسلوب مبسّط: نستعمل API غير رسمية لفهارس قديمة (قد تعود بنتيجة قليلة)
-    # نحاول domains عامة. إذا لم تنجح، نرجع قائمة فارغة.
     out = []
     api = "https://index.commoncrawl.org/CC-MAIN-2024-10-index"
     params = {"url": f"*{query}*", "output": "json"}
@@ -153,10 +148,10 @@ def search_commoncrawl(query: str, max_results: int = 6) -> List[Dict]:
                     row = json.loads(ln)
                 except Exception:
                     continue
-                urlkey = row.get("urlkey", "")
                 link = row.get("url", "")
-                if not link or not link.startswith(("http://", "https://")):
+                if not link.startswith(("http://", "https://")):
                     continue
+                urlkey = row.get("urlkey", "")
                 title = _clean_text(urlkey.split(")")[0].replace(",", " ").replace("_", " "))
                 item = _norm_result({"title": title or link, "snippet": "", "link": link})
                 if _is_valid(item):
@@ -210,13 +205,97 @@ def search_ddg(query: str, max_results: int = 6) -> List[Dict]:
         return []
     return out
 
-# ====================== خط الأنابيب بالترتيب المطلوب ======================
+# ====================== Social Search ======================
+SOCIAL_SITES = {
+    "X (Twitter)": "site:twitter.com",
+    "Instagram": "site:instagram.com",
+    "Facebook": "site:facebook.com",
+    "YouTube": "site:youtube.com",
+    "TikTok": "site:tiktok.com",
+    "LinkedIn": "site:linkedin.com",
+    "Telegram": "site:t.me",
+    "Reddit": "site:reddit.com",
+}
+
+SOCIAL_HINTS = [
+    "انستغرام","إنستغرام","instagram","انستا",
+    "تويتر","x.com","twitter","X",
+    "فيسبوك","facebook",
+    "يوتيوب","youtube",
+    "تيك توك","tiktok",
+    "لينكدإن","linkedin",
+    "تلغرام","تليجرام","telegram","t.me",
+    "رديت","reddit",
+    "حساب","username","@","اوجد","ابحث عن","وين حساب",
+]
+
+def is_social_query(q: str) -> bool:
+    qn = q.lower()
+    if any(h.lower() in qn for h in SOCIAL_HINTS):
+        return True
+    # عامل بسيط: وجود @username أو كلمة "حساب" عربية
+    if "@" in q or "حساب" in q:
+        return True
+    return False
+
+def search_social(name: str, max_per_platform: int = 3) -> List[Dict]:
+    """
+    نستخدم DuckDuckGo API للبحث المقيد بالموقع لكل منصة.
+    """
+    results: List[Dict] = []
+    with DDGS() as dd:
+        for platform, site_q in SOCIAL_SITES.items():
+            q = f'{site_q} "{name}"'
+            try:
+                batch = []
+                for r in dd.text(q, max_results=max_per_platform):
+                    item = _norm_result({
+                        "title": f"[{platform}] " + (r.get("title") or ""),
+                        "snippet": r.get("body") or "",
+                        "link": r.get("href") or "",
+                    })
+                    if _is_valid(item):
+                        batch.append(item)
+                results.extend(batch)
+            except Exception:
+                continue
+    # إزالة تكرارات عامة
+    uniq, seen = [], set()
+    for r in results:
+        key = (r["title"], r["link"])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    return uniq
+
+def compose_social_answer(query: str, results: List[Dict]) -> Dict:
+    if not results:
+        return {
+            "answer": f"لم أعثر على حسابات واضحة مرتبطة بـ «{query}». جرّب كتابة الاسم مع دولة/مدينة أو لقب.",
+            "links": []
+        }
+    bullets = []
+    links = []
+    for r in results:
+        t, s, u = r["title"], r.get("snippet", ""), r["link"]
+        if u:
+            links.append(u)
+        if t:
+            bullets.append("• " + t)
+        if s:
+            bullets.append("  – " + s)
+
+    bullets = _dedupe_keep_order(bullets, 18)
+    links = _dedupe_keep_order(links, 15)
+
+    head = f"طلبك: البحث عن الحسابات/الملفات المرتبطة بـ «{query}»\n\nنتائج من أكثر منصات السوشيال شيوعًا:\n"
+    body = "\n".join(bullets)
+    tail = "\n\nروابط مباشرة:\n" + "\n".join([f"- {u}" for u in links]) if links else ""
+    return {"answer": head + body + tail, "links": links}
+
+# ====================== خط الأنابيب (ويب عام) ======================
 def web_search_pipeline(query: str, max_results: int = 8) -> List[Dict]:
-    """
-    يحاول بالترتيب:
-    Google -> Wikipedia -> Deep (Ahmia + CommonCrawl) -> Bing -> DDG
-    ويُرجع مزيجًا نظيفًا (بدون تكرارات)، حتى max_results.
-    """
     buckets: List[List[Dict]] = []
     order = [search_google, search_wikipedia, search_ahmia, search_commoncrawl, search_bing, search_ddg]
 
@@ -227,11 +306,9 @@ def web_search_pipeline(query: str, max_results: int = 8) -> List[Dict]:
             res = []
         if res:
             buckets.append(res)
-        # لو أول دلوين جابوا نتائج كافية، نوقف مبكرًا لتقليل الوقت
         if len(buckets) >= 2 and sum(len(b) for b in buckets) >= max_results:
             break
 
-    # دمج وتفريد
     merged: List[Dict] = []
     seen = set()
     for b in buckets:
@@ -248,7 +325,6 @@ def web_search_pipeline(query: str, max_results: int = 8) -> List[Dict]:
 
     return merged
 
-# ====================== تركيب الإجابة ======================
 def compose_web_answer(question: str, results: List[Dict]) -> Dict:
     bullets, links = [], []
     for r in results:
@@ -276,10 +352,18 @@ def compose_web_answer(question: str, results: List[Dict]) -> Dict:
     return {"answer": head + body + tail, "links": links}
 
 # ====================== الواجهة لـ app.py ======================
-def smart_answer(question: str):
+def smart_answer(question: str) -> Tuple[str, Dict]:
     q = (question or "").strip()
     if not q:
         return "لم أستلم سؤالاً.", {"mode": "invalid"}
+
+    # إذا كان المستخدم يطلب حساب/اسم على السوشيال — نفعل نمط السوشيال
+    if is_social_query(q):
+        soc = search_social(q, max_per_platform=3)
+        pack = compose_social_answer(q, soc)
+        return pack["answer"], {"mode": "social", "links": pack.get("links", [])}
+
+    # غير ذلك: بحث ويب عام بالترتيب المطلوب
     results = web_search_pipeline(q, max_results=8)
     pack = compose_web_answer(q, results)
     return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
