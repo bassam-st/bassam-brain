@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: bassam-brain
+    env: python
+    plan: free
+
+    # تثبيت أدوات البناء أولًا ثم بقية المتطلبات
+    buildCommand: >
+      python -m pip install --upgrade pip==23.2.1 setuptools==68.0.0 wheel==0.41.2 &&
+      python -m pip install -r requirements.txt
+
+    # تشغيل FastAPI عبر Uvicorn على المنفذ الذي يحدده Render
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+
+    # إجبار بيئة Render على بايثون 3.9 (متطابق مع runtime.txt)
+    pythonVersion: 3.9.19
