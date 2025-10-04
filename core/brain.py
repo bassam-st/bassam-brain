@@ -1,298 +1,285 @@
-# core/brain.py — Bassam Brain Pro (Starter)
-# - تحليل سؤال بسيط (عواصم + رياضيات)
-# - بحث ويب متعدد المصادر بالترتيب: Wikipedia → Bing → Brave → SerpAPI → DuckDuckGo
-# - تلخيص نقاط + روابط
-# - Deep Web: مُعطّل افتراضيًا (يتطلب تور)، مضاف كـ stub آمن
+# core/brain.py
+# Bassam Brain Deep+ — بحث ويب ذكي بالترتيب:
+# Google -> Wikipedia -> Deep Web (Ahmia + CommonCrawl) -> Bing -> DuckDuckGo
+# يعمل بدون TOR وبلا مفاتيح مدفوعة، جاهز لـ Render Starter.
 
-from typing import List, Dict, Tuple
-import os, re, math, asyncio
-from urllib.parse import quote
-
+from typing import List, Dict
+import re, json
 import httpx
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 
-# ========= تعريب خفيف =========
-AR_DIAC  = re.compile(r'[\u064B-\u0652]')
-def normalize_ar(s: str) -> str:
-    s = s or ""
-    s = AR_DIAC.sub("", s)
-    s = s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
-    s = s.replace("ة","ه").replace("ى","ي").replace("ؤ","و").replace("ئ","ي")
-    s = s.replace("گ","ك").replace("پ","ب").replace("ڤ","ف").replace("ظ","ض")
-    return re.sub(r"\s+"," ", s).strip()
+UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+HEADERS = {"User-Agent": UA, "Accept-Language": "ar,en-US;q=0.9,en;q=0.8"}
+TIMEOUT = 12  # ثوانٍ
 
-# ========= 1) كاشف "عاصمة دولة" =========
-CAPITAL_PAT = re.compile(r"(?:ما|ماهي|ما هي)?\s*عاص(?:م(?:ة)?)\s+(.+?)\s*\?*$")
-async def capital_via_restcountries(country: str) -> str | None:
-    url = f"https://restcountries.com/v3.1/name/{quote(country)}?fields=capital,name,translations"
-    try:
-        async with httpx.AsyncClient(timeout=10) as cl:
-            r = await cl.get(url)
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            if isinstance(data, list) and data:
-                cap = data[0].get("capital")
-                if isinstance(cap, list) and cap:
-                    return cap[0]
-                if isinstance(cap, str):
-                    return cap
-    except Exception:
-        return None
-    return None
+# ====================== أدوات مساعدة ======================
+def _clean_text(s: str) -> str:
+    if not s:
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\u200f|\u200e", "", s)  # RTL/LTR markers
+    return s
 
-def detect_capital_question(q: str) -> str | None:
-    qn = normalize_ar(q)
-    m = CAPITAL_PAT.search(qn)
-    if not m:
-        return None
-    country = m.group(1).strip(" ؟!.،")
-    return country if country else None
-
-# ========= 2) أستاذ الرياضيات (Sympy) =========
-# حلول خطوة بخطوة مبسّطة (اشتقاق/تكامل/حل معادلة بسيطة)
-from sympy import symbols, Eq, solve, sympify, diff, integrate
-x = symbols('x')
-
-def try_math_teacher(q: str) -> str | None:
-    """
-    أمثلة:
-    - حل المعادلة: 2x+3=7
-    - مشتق x^3 + 5x
-    - تكامل x^2
-    """
-    text = normalize_ar(q).lower()
-    try:
-        if "مشتق" in text or "اشتقاق" in text:
-            expr_str = text.replace("مشتق","").replace("اشتقاق","").strip()
-            expr = sympify(expr_str, convert_xor=True)
-            d = diff(expr, x)
-            return f"المطلوب: مشتق {expr}\nالخطوة 1: نشتق الحدود.\nالنتيجة: {d}"
-        if "تكامل" in text:
-            expr_str = text.replace("تكامل","").strip()
-            expr = sympify(expr_str, convert_xor=True)
-            integ = integrate(expr, x)
-            return f"المطلوب: تكامل {expr}\nالخطوة 1: نكامل الحدود.\nالنتيجة: {integ} + C"
-        if "حل المعادلة" in text or "=" in text:
-            # نحاول شكل a = b
-            if "=" in text:
-                left, right = text.split("=",1)
-                left = sympify(left.replace("حل المعادلة","").strip(), convert_xor=True)
-                right = sympify(right.strip(), convert_xor=True)
-                eq = Eq(left, right)
-                sol = solve(eq, x, dict=True)
-                return f"المطلوب: حل {eq}\nالخطوات: نحول ونحل للمجهول x.\nالحل: {sol}"
-    except Exception:
-        return None
-    return None
-
-# ========= 3) بحث الويب متعدد المصادر =========
-def _pack(title="", snippet="", link=""):
-    return {"title": (title or "").strip(), "snippet": (snippet or "").strip(), "link": (link or "").strip()}
-
-async def search_wikipedia(query: str, max_results: int = 5):
-    out = []
-    # نجرب العربية أولاً ثم الإنجليزية
-    for api in [
-        ("https://ar.wikipedia.org/w/api.php", "https://ar.wikipedia.org/wiki/"),
-        ("https://en.wikipedia.org/w/api.php", "https://en.wikipedia.org/wiki/"),
-    ]:
-        url, base = api
-        params = {"action":"query","list":"search","format":"json","srlimit":max_results,"srsearch":query,"utf8":1}
-        try:
-            async with httpx.AsyncClient(timeout=12) as cl:
-                r = await cl.get(url, params=params)
-                if r.status_code != 200: 
-                    continue
-                data = r.json()
-                for hit in data.get("query",{}).get("search",[]):
-                    title = hit.get("title","")
-                    snippet = BeautifulSoup(hit.get("snippet",""), "lxml").get_text(" ")
-                    link = f"{base}{title.replace(' ','_')}"
-                    out.append(_pack(title, snippet, link))
-        except Exception:
+def _dedupe_keep_order(items: List[str], limit: int) -> List[str]:
+    seen, out = set(), []
+    for x in items:
+        x = (x or "").strip()
+        if not x or x in seen:
             continue
+        seen.add(x)
+        out.append(x)
+        if len(out) >= limit:
+            break
     return out
 
-async def search_bing(query: str, max_results: int = 5):
-    key = os.getenv("BING_API_KEY")
-    if not key: return []
-    url = "https://api.bing.microsoft.com/v7.0/search"
-    headers = {"Ocp-Apim-Subscription-Key": key}
-    params  = {"q": query, "count": max_results, "mkt": "en-US", "textDecorations": False}
+def _norm_result(r: Dict) -> Dict:
+    return {
+        "title": _clean_text(r.get("title", "")),
+        "snippet": _clean_text(r.get("snippet", "")),
+        "link": (r.get("link", "") or "").strip(),
+    }
+
+def _is_valid(r: Dict) -> bool:
+    return bool(r.get("title") and r.get("link"))
+
+# ====================== Google ======================
+def search_google(query: str, max_results: int = 6) -> List[Dict]:
+    url = "https://www.google.com/search"
+    params = {"q": query, "hl": "ar"}
     out = []
     try:
-        async with httpx.AsyncClient(timeout=12) as cl:
-            r = await cl.get(url, headers=headers, params=params)
-            if r.status_code != 200: return []
-            for it in r.json().get("webPages",{}).get("value",[]):
-                out.append(_pack(it.get("name",""), it.get("snippet",""), it.get("url","")))
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True) as c:
+            r = c.get(url, params=params)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
+            for g in soup.select("div.g"):
+                a = g.select_one("a")
+                h3 = g.select_one("h3")
+                if not a or not h3:
+                    continue
+                title = _clean_text(h3.get_text(" ", strip=True))
+                link = a.get("href") or ""
+                sn_el = g.select_one("div.VwiC3b, span.aCOpRe")
+                snippet = _clean_text(sn_el.get_text(" ", strip=True) if sn_el else "")
+                item = _norm_result({"title": title, "snippet": snippet, "link": link})
+                if _is_valid(item):
+                    out.append(item)
+                if len(out) >= max_results:
+                    break
     except Exception:
         return []
     return out
 
-async def search_brave(query: str, max_results: int = 5):
-    key = os.getenv("BRAVE_API_KEY")
-    if not key: return []
-    url = "https://api.search.brave.com/res/v1/web/search"
-    headers = {"Accept":"application/json","X-Subscription-Token":key}
-    params  = {"q": query, "count": max_results, "safesearch": "moderate", "freshness": "month"}
+# ====================== Wikipedia (Arabic API) ======================
+def search_wikipedia(query: str, max_results: int = 6) -> List[Dict]:
+    url = "https://ar.wikipedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "list": "search",
+        "srsearch": query,
+        "format": "json",
+        "srlimit": max_results,
+        "utf8": 1,
+    }
     out = []
     try:
-        async with httpx.AsyncClient(timeout=12) as cl:
-            r = await cl.get(url, headers=headers, params=params)
-            if r.status_code != 200: return []
-            for it in r.json().get("web",{}).get("results",[]):
-                out.append(_pack(it.get("title",""), it.get("description",""), it.get("url","")))
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as c:
+            r = c.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+            for it in data.get("query", {}).get("search", []):
+                title = _clean_text(it.get("title") or "")
+                snippet = _clean_text(re.sub(r"<.*?>", "", it.get("snippet") or ""))
+                link = f"https://ar.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                item = _norm_result({"title": title, "snippet": snippet, "link": link})
+                if _is_valid(item):
+                    out.append(item)
+                if len(out) >= max_results:
+                    break
     except Exception:
         return []
     return out
 
-async def search_serpapi(query: str, max_results: int = 5):
-    key = os.getenv("SERPAPI_KEY")
-    if not key: return []
-    url = "https://serpapi.com/search.json"
-    params = {"engine":"google","q":query,"num":max_results,"api_key":key}
+# ====================== Deep Web (Ahmia) ======================
+# Ahmia يوفر واجهة فهرسة قانونية لنتائج .onion (تُعرض عبر ahmia.fi بواجهات clearnet)
+def search_ahmia(query: str, max_results: int = 6) -> List[Dict]:
+    # API غير موثق بالكامل؛ نستعمل صفحة البحث كـ HTML ونستخرج النتائج القانونية الظاهرة
+    url = "https://ahmia.fi/search/"
+    params = {"q": query}
     out = []
     try:
-        async with httpx.AsyncClient(timeout=12) as cl:
-            r = await cl.get(url, params=params)
-            if r.status_code != 200: return []
-            for it in r.json().get("organic_results", []):
-                out.append(_pack(it.get("title",""), it.get("snippet",""), it.get("link","")))
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True) as c:
+            r = c.get(url, params=params)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
+            for res in soup.select("div#results h4 a"):
+                title = _clean_text(res.get_text(" ", strip=True))
+                link = (res.get("href") or "").strip()
+                # نفلتر أي روابط غير مفيدة، ونبقي ما يمكن فتحه في clearnet/أرشيف
+                if not link:
+                    continue
+                # مقتطف بسيط:
+                par = soup.find("p")
+                snippet = _clean_text(par.get_text(" ", strip=True)) if par else ""
+                item = _norm_result({"title": title, "snippet": snippet, "link": link})
+                if _is_valid(item):
+                    out.append(item)
+                if len(out) >= max_results:
+                    break
     except Exception:
         return []
     return out
 
-async def search_ddg(query: str, max_results: int = 6):
-    # DuckDuckGo كـ fallback أخير (بدون مفاتيح)
+# ====================== Deep Web (CommonCrawl Index) ======================
+# نستخدم واجهة CC Index البسيطة للعثور على صفحات مؤرشفة قد لا تظهر في محركات البحث العادية
+def search_commoncrawl(query: str, max_results: int = 6) -> List[Dict]:
+    # أسلوب مبسّط: نستعمل API غير رسمية لفهارس قديمة (قد تعود بنتيجة قليلة)
+    # نحاول domains عامة. إذا لم تنجح، نرجع قائمة فارغة.
+    out = []
+    api = "https://index.commoncrawl.org/CC-MAIN-2024-10-index"
+    params = {"url": f"*{query}*", "output": "json"}
+    try:
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as c:
+            r = c.get(api, params=params)
+            if r.status_code != 200:
+                return []
+            lines = r.text.splitlines()
+            for ln in lines[:max_results * 3]:
+                try:
+                    row = json.loads(ln)
+                except Exception:
+                    continue
+                urlkey = row.get("urlkey", "")
+                link = row.get("url", "")
+                if not link or not link.startswith(("http://", "https://")):
+                    continue
+                title = _clean_text(urlkey.split(")")[0].replace(",", " ").replace("_", " "))
+                item = _norm_result({"title": title or link, "snippet": "", "link": link})
+                if _is_valid(item):
+                    out.append(item)
+                if len(out) >= max_results:
+                    break
+    except Exception:
+        return []
+    return out
+
+# ====================== Bing ======================
+def search_bing(query: str, max_results: int = 6) -> List[Dict]:
+    url = "https://www.bing.com/search"
+    params = {"q": query, "setlang": "ar"}
     out = []
     try:
-        from duckduckgo_search import DDGS
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT, follow_redirects=True) as c:
+            r = c.get(url, params=params)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
+            for li in soup.select("li.b_algo"):
+                a = li.select_one("h2 a")
+                if not a:
+                    continue
+                title = _clean_text(a.get_text(" ", strip=True))
+                link = a.get("href") or ""
+                snippet = _clean_text(li.select_one("p").get_text(" ", strip=True) if li.select_one("p") else "")
+                item = _norm_result({"title": title, "snippet": snippet, "link": link})
+                if _is_valid(item):
+                    out.append(item)
+                if len(out) >= max_results:
+                    break
+    except Exception:
+        return []
+    return out
+
+# ====================== DuckDuckGo ======================
+def search_ddg(query: str, max_results: int = 6) -> List[Dict]:
+    out = []
+    try:
         with DDGS() as dd:
             for r in dd.text(query, max_results=max_results):
-                out.append(_pack(r.get("title",""), r.get("body",""), r.get("href","")))
+                item = _norm_result({
+                    "title": r.get("title") or "",
+                    "snippet": r.get("body") or "",
+                    "link": r.get("href") or "",
+                })
+                if _is_valid(item) and "duckduckgo.com/l/?" not in item["link"]:
+                    out.append(item)
     except Exception:
         return []
     return out
 
-def _dedupe(results: List[Dict], limit=10) -> List[Dict]:
-    seen, out = set(), []
-    for r in results:
-        u = r.get("link","")
-        if not u or u in seen: 
-            continue
-        seen.add(u)
-        if r.get("title"): out.append(r)
-        if len(out) >= limit: break
-    return out
+# ====================== خط الأنابيب بالترتيب المطلوب ======================
+def web_search_pipeline(query: str, max_results: int = 8) -> List[Dict]:
+    """
+    يحاول بالترتيب:
+    Google -> Wikipedia -> Deep (Ahmia + CommonCrawl) -> Bing -> DDG
+    ويُرجع مزيجًا نظيفًا (بدون تكرارات)، حتى max_results.
+    """
+    buckets: List[List[Dict]] = []
+    order = [search_google, search_wikipedia, search_ahmia, search_commoncrawl, search_bing, search_ddg]
 
-async def web_search(query: str, max_results: int = 6) -> List[Dict]:
-    """Wikipedia → Bing → Brave → SerpAPI → DuckDuckGo (أخيرًا)"""
-    all_results: List[Dict] = []
-
-    # 1) Wikipedia أولاً
-    try:
-        all_results += await search_wikipedia(query, max_results=3)
-    except Exception:
-        pass
-
-    # 2) Bing (بمفتاح)
-    try:
-        all_results += await search_bing(query, max_results=4)
-    except Exception:
-        pass
-
-    # 3) Brave (بمفتاح)
-    try:
-        all_results += await search_brave(query, max_results=3)
-    except Exception:
-        pass
-
-    # 4) SerpAPI (Google) (بمفتاح)
-    try:
-        all_results += await search_serpapi(query, max_results=4)
-    except Exception:
-        pass
-
-    # 5) DuckDuckGo كاحتياطي
-    if len(all_results) < 3:
+    for fn in order:
         try:
-            all_results += await search_ddg(query, max_results=6)
+            res = fn(query, max_results=max_results)
         except Exception:
-            pass
+            res = []
+        if res:
+            buckets.append(res)
+        # لو أول دلوين جابوا نتائج كافية، نوقف مبكرًا لتقليل الوقت
+        if len(buckets) >= 2 and sum(len(b) for b in buckets) >= max_results:
+            break
 
-    return _dedupe(all_results, limit=max_results)
+    # دمج وتفريد
+    merged: List[Dict] = []
+    seen = set()
+    for b in buckets:
+        for r in b:
+            key = (r["title"], r["link"])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+            if len(merged) >= max_results:
+                break
+        if len(merged) >= max_results:
+            break
 
-# ========= 4) Deep Web (اختياري/معطّل افتراضيًا) =========
-# ملاحظة أمان: للوصول الفعلي إلى .onion يلزم Tor Proxy؛ الكود هنا Stub آمن لا يعمل بدون إعدادات خاصة.
-async def deepweb_search_stub(query: str) -> List[Dict]:
-    if os.getenv("DEEPWEB_ENABLED","0") != "1":
-        return []
-    # هنا يمكن لاحقًا استخدام requests عبر socks5h إلى Tor—لكن نتركه مُعطّل افتراضيًا.
-    return []
+    return merged
 
-# ========= 5) تلخيص النتائج إلى نقاط + روابط =========
-def _pick_lines(text: str, k: int = 2) -> List[str]:
-    if not text: return []
-    lines = [BeautifulSoup(text, "lxml").get_text(" ").strip() for _ in [1]]
-    # تقسيم بسيط بالنقطة/الفاصلة/السطر
-    parts = re.split(r"[\.!\n:\-–]+", lines[0])
-    parts = [p.strip() for p in parts if 15 <= len(p.strip()) <= 220]
-    return parts[:k]
-
+# ====================== تركيب الإجابة ======================
 def compose_web_answer(question: str, results: List[Dict]) -> Dict:
     bullets, links = [], []
-    for r in results[:8]:
-        t, s, u = r.get("title",""), r.get("snippet",""), r.get("link","")
-        if u: links.append(u)
-        if 15 <= len(t) <= 140: bullets.append(t.strip())
-        bullets += _pick_lines(s, k=2)
+    for r in results:
+        t, s, u = r["title"], r.get("snippet", ""), r["link"]
+        if u:
+            links.append(u)
+        if t and 10 <= len(t) <= 140:
+            bullets.append("• " + t)
+        if s and 20 <= len(s) <= 220:
+            bullets.append("  – " + s)
 
-    # إزالة التكرار
-    clean, seen = [], set()
-    for b in bullets:
-        if b and b not in seen:
-            seen.add(b); clean.append(b)
-        if len(clean) >= 10: break
+    bullets = _dedupe_keep_order(bullets, 14)
+    links   = _dedupe_keep_order(links, 8)
 
-    if not clean:
-        return {"answer": "بحثت ولم أجد نقاطًا واضحة كفاية. جرّب إعادة صياغة السؤال.", "links": links[:5]}
+    if not bullets:
+        return {
+            "answer": f"بحثت عن «{question}» لكن لم تتضح نقاط كافية. جرّب إعادة الصياغة أو أضف تحديدًا أكثر.",
+            "links": links
+        }
 
-    head = f"سؤالك: {question}\n\nملخّص من مصادر متعددة:\n"
-    body = "\n".join([f"• {b}" for b in clean])
-    tail = ("\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])) if links else ""
-    return {"answer": head + body + tail, "links": links[:5]}
+    head = f"سؤالك: {question}\n\nخلاصة من مصادر متعدّدة:\n"
+    body = "\n".join(bullets)
+    tail = ("\n\nروابط مفيدة:\n" + "\n".join([f"- {u}" for u in links])) if links else ""
 
-# ========= 6) الواجهة الموحدة الذكية =========
-async def smart_answer(question: str) -> Tuple[str, Dict]:
+    return {"answer": head + body + tail, "links": links}
+
+# ====================== الواجهة لـ app.py ======================
+def smart_answer(question: str):
     q = (question or "").strip()
     if not q:
-        return "لم أستلم سؤالًا.", {"mode": "invalid"}
-
-    # (أ) عواصم
-    country = detect_capital_question(q)
-    if country:
-        cap = await capital_via_restcountries(country)
-        if cap:
-            return f"عاصمة {country} هي: **{cap}**.", {"mode": "capital", "country": country, "capital": cap}
-
-    # (ب) رياضيات
-    math_try = try_math_teacher(q)
-    if math_try:
-        return math_try, {"mode": "math"}
-
-    # (ج) Deep Web (Stub) — لن يعيد نتائج إلا إذا فعّلته بمتغير البيئة
-    deep_hits = await deepweb_search_stub(q)
-    if deep_hits:
-        pack = compose_web_answer(q, deep_hits)
-        return pack["answer"], {"mode": "deepweb", "links": pack.get("links", [])}
-
-    # (د) الويب العام
-    results = await web_search(q, max_results=6)
-    if results:
-        pack = compose_web_answer(q, results)
-        return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
-
-    return ("بحثت في المصادر ولم أجد إجابة واضحة. رجاءً أعد صياغة سؤالك "
-            "أو حدّد كلمات أكثر دقة."), {"mode": "none"}
+        return "لم أستلم سؤالاً.", {"mode": "invalid"}
+    results = web_search_pipeline(q, max_results=8)
+    pack = compose_web_answer(q, results)
+    return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
