@@ -1,59 +1,15 @@
-# ==== Bassam الذكي — Deep Search Pro v3.5 ====
-
-# ==== الأساسيات ====
+# ==== Bassam v3.5 Pro ====
 fastapi==0.110.0
 uvicorn==0.23.2
 jinja2==3.1.3
-aiofiles==23.2.1
-python-multipart==0.0.9
 
-# ==== الشبكات وجلب المواقع ====
-requests==2.32.3
+# Web & scraping
 httpx==0.27.0
 beautifulsoup4==4.12.3
 lxml==5.2.2
-feedparser==6.0.11
 
-# ==== البحث والذكاء ====
-duckduckgo_search==6.2.6
-rapidfuzz==3.6.1
-rank-bm25==0.2.2
-numpy==1.24.4
-scikit-learn==1.3.0
+# Static files (Starlette)
+aiofiles==23.2.1
 
-# ==== الرياضيات والتحليل ====
-sympy==1.12
-
-# ==== الذكاء الاصطناعي والتلخيص ====
-transformers==4.40.0
-torch==2.2.2
-sentence-transformers==2.7.0
-langdetect==1.0.9
-
-# ==== الذكاء اللغوي العربي ====
-arabic-reshaper==3.0.0
-python-bidi==0.4.2
-
-# ==== التخزين المؤقت ====
-diskcache==5.6.3
-
-# ==== Deep Web وأدوات متقدمة ====
-fake-useragent==1.5.1
-selenium==4.20.0
-webdriver-manager==4.0.2
-
-# ==== أدوات إضافية للمطور ====
-certifi>=2023.7.22
-charset-normalizer>=3.3.0
-idna>=3.4
-urllib3>=2.0.7
-
-# ==== أدوات PDF / تقارير (اختياري) ====
-reportlab==4.2.2
-
-# ==== Bassam — Smart Brain Core ====
-tqdm==4.66.4
-colorama==0.4.6
-
-# ==== النسخة المجانية الكاملة ====
-# تعمل على Render و Replit دون اشتراك مدفوع
+# إرسال نماذج (اختياري)
+python-multipart==0.0.9
