@@ -1,188 +1,92 @@
-/* 🎨 Bassam الذكي — النسخة الكاملة من تصميم الواجهة (style.css) */
-
-/* إعدادات عامة */
-:root {
-  color-scheme: dark light;
-  --bg: #0b0f19;
-  --fg: #eaeef8;
-  --card: #121826;
-  --accent: #4f46e5;
-  --border: #202b3a;
-  --muted: #a0a8b8;
-  --success: #22c55e;
-  --error: #ef4444;
-  --radius: 12px;
-  --font-main: system-ui, "Segoe UI", Arial, sans-serif;
+:root{
+  --bg:#0b1020;
+  --card:#131a2e;
+  --text:#e8eefc;
+  --muted:#a8b3cf;
+  --accent:#6ea8fe;
+  --success:#3ad29f;
+  --border:#223055;
+  --btn:#2a385f;
+  --btn-hover:#32406b;
 }
 
-* {
-  box-sizing: border-box;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,"Apple Color Emoji","Segoe UI Emoji"}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.container{max-width:880px;margin:40px auto;padding:0 16px}
+.header{margin-bottom:18px}
+.header h1{margin:0 0 8px 0;font-size:28px}
+.subtitle{margin:0;color:var(--muted);line-height:1.6}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:16px;
+  margin:16px 0;
+  box-shadow:0 6px 20px rgba(0,0,0,.2);
 }
 
-/* الجسم */
-body {
-  margin: 0;
-  padding: 0;
-  font-family: var(--font-main);
-  background: var(--bg);
-  color: var(--fg);
-  min-height: 100vh;
+.label{display:block;margin:0 0 8px 4px;color:var(--muted)}
+.ask-form textarea,
+.save-form textarea{
+  width:100%;
+  background:#0f1629;
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px;
+  outline:none;
+  resize:vertical;
+}
+.ask-form textarea:focus,
+.save-form textarea:focus{border-color:var(--accent)}
+
+.btn{
+  display:inline-block;
+  border:none;
+  border-radius:10px;
+  padding:10px 16px;
+  margin-top:10px;
+  background:var(--btn);
+  color:var(--text);
+  cursor:pointer;
+  transition:.15s ease-in-out;
+}
+.btn:hover{background:var(--btn-hover)}
+.btn.primary{background:#3d61ff}
+.btn.primary:hover{background:#3354e6}
+.btn.success{background:var(--success);color:#05290f}
+.btn.success:hover{filter:brightness(1.05)}
+
+.section-title{margin:0 0 10px 0;font-size:20px}
+.q{margin:.4rem 0 .6rem}
+.a{margin:.6rem 0}
+.answer-block{
+  margin-top:.5rem;
+  background:#0f1629;
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px;
+  line-height:1.7;
+  word-wrap:break-word;
 }
 
-/* العنوان العلوي */
-header.top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--card);
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 2px 4px rgba(0,0,0,.3);
+.links{margin-top:12px}
+.links-title{color:var(--muted);margin-bottom:6px}
+.links ul{margin:6px 0 0 0;padding-inline-start:20px}
+.links li{margin:4px 0}
+
+.save-details summary{
+  cursor:pointer;
+  color:var(--accent);
+  margin-top:12px;
+  user-select:none;
 }
-
-header.top h1 {
-  margin: 0;
-  font-size: 1.2rem;
-  color: var(--fg);
-  letter-spacing: 0.3px;
+.footer{
+  display:flex;gap:12px;align-items:center;justify-content:space-between;
+  margin:30px 0 60px;color:var(--muted)
 }
-
-/* أزرار التثبيت والوضع الليلي */
-header.top .actions {
-  display: flex;
-  gap: 10px;
-}
-
-button {
-  cursor: pointer;
-  border: 0;
-  border-radius: var(--radius);
-  font-size: 15px;
-  padding: 10px 14px;
-  background: var(--accent);
-  color: #fff;
-  transition: 0.2s ease;
-}
-
-button:hover {
-  opacity: 0.9;
-  transform: scale(1.02);
-}
-
-button:disabled {
-  background: #444;
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* القسم الرئيسي */
-section.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin: 30px auto;
-  max-width: 850px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-/* نموذج البحث */
-form.row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-
-input#q {
-  flex: 1;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: #0f1523;
-  color: var(--fg);
-  font-size: 16px;
-}
-
-input#q::placeholder {
-  color: var(--muted);
-}
-
-.chk {
-  display: flex;
-  align-items: center;
-  font-size: 14px;
-  gap: 6px;
-  color: var(--muted);
-}
-
-/* مربع الإجابة */
-#answer {
-  background: #0f1520;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  line-height: 1.6;
-  font-size: 15px;
-  color: var(--fg);
-  margin-bottom: 16px;
-}
-
-/* المصادر */
-#sources {
-  background: #111827;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-}
-
-#sources a {
-  display: block;
-  color: var(--accent);
-  margin: 4px 0;
-  text-decoration: none;
-  font-size: 14px;
-}
-
-#sources a:hover {
-  text-decoration: underline;
-}
-
-/* الردود */
-.answer-block {
-  background: var(--card);
-  padding: 14px;
-  border-radius: var(--radius);
-  margin-top: 12px;
-  border: 1px solid var(--border);
-}
-
-/* فوتر */
-footer {
-  text-align: center;
-  padding: 18px;
-  font-size: 13px;
-  color: var(--muted);
-  border-top: 1px solid var(--border);
-  margin-top: 40px;
-}
-
-/* تجاوب الموبايل */
-@media (max-width: 600px) {
-  header.top h1 {
-    font-size: 1rem;
-  }
-
-  button {
-    font-size: 14px;
-    padding: 8px 12px;
-  }
-
-  form.row {
-    flex-direction: column;
-  }
-
-  input#q {
-    width: 100%;
-  }
-}
+.footer .muted{color:var(--muted)}
