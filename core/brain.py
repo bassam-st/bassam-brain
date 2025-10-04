@@ -1,19 +1,32 @@
 # core/brain.py
-# عقل مزدوج مع بحث ويب "مُتحمِّل للأخطاء" (DDGS + HTML fallback)
+# العقل المزدوج (مجاني) — بحث متعدد المصادر + تلخيص + ذاكرة محلية
+# المصادر: DuckDuckGo + Bing + Wikipedia + Hacker News + Stack Overflow + RSS (+ Nitter اختياري)
+
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
-import re, time, random
+import os, re, json, urllib.parse
 
+import httpx
+from bs4 import BeautifulSoup
 from rapidfuzz import fuzz, process
 from duckduckgo_search import DDGS
-from bs4 import BeautifulSoup
-import requests
+import feedparser
 
-# ================= إعداد ملف المعرفة =================
+# ------------------------ إعدادات عامة ------------------------
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 KB_FILE = DATA_DIR / "knowledge.txt"
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    )
+}
+HTTP_TIMEOUT = httpx.Timeout(12.0, connect=12.0)
+MAX_RESULTS_PER_ENGINE = 5
+
+# ------------------------ تهيئة قاعدة المعرفة -----------------
 if not KB_FILE.exists():
     KB_FILE.write_text(
         "سؤال: ما فوائد القراءة؟\n"
@@ -22,22 +35,26 @@ if not KB_FILE.exists():
         encoding="utf-8"
     )
 
-# ================= أدوات عربية بسيطة =================
+# ------------------------ أدوات عربية بسيطة -------------------
 AR_DIAC  = re.compile(r'[\u064B-\u0652]')
 TOKEN_RE = re.compile(r'[A-Za-z\u0621-\u064A0-9]+')
 
 def normalize_ar(s: str) -> str:
     s = s or ""
     s = AR_DIAC.sub("", s)
-    s = s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
-    s = s.replace("ة","ه").replace("ى","ي").replace("ؤ","و").replace("ئ","ي")
-    s = s.replace("گ","ك").replace("پ","ب").replace("ڤ","ف").replace("ظ","ض")
-    return re.sub(r"\s+"," ", s).strip()
+    s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    s = s.replace("ة", "ه").replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
+    s = s.replace("گ", "ك").replace("پ", "ب").replace("ڤ", "ف")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 def tokens(s: str) -> List[str]:
     return TOKEN_RE.findall(normalize_ar(s))
 
-# ================= تحميل Q/A =================
+def is_arabic(text: str) -> bool:
+    return bool(re.search(r'[\u0600-\u06FF]', text or ""))
+
+# ------------------------ تحميل Q/A ----------------------------
 def load_qa() -> List[Dict]:
     text = KB_FILE.read_text(encoding="utf-8")
     blocks = [b.strip() for b in text.split("---") if b.strip()]
@@ -74,162 +91,307 @@ def local_search(q: str) -> Tuple[Optional[Dict], float]:
             best_doc, best_score = qa, float(s)
     return best_doc, best_score
 
-# ================= Web Search (متحمّل للأخطاء) =================
-UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
+# ------------------------ أدوات مساعدة للروابط -----------------
+def unredirect_ddg(url: str) -> str:
+    """إزالة تحويلة DuckDuckGo (uddg=) إن وجدت."""
+    if not url:
+        return url
+    try:
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "uddg" in qs and qs["uddg"]:
+            return urllib.parse.unquote(qs["uddg"][0])
+    except Exception:
+        pass
+    return url
 
-class WebSearcher:
-    def __init__(self, timeout: float = 8.0, retries: int = 2):
-        self.timeout = timeout
-        self.retries = retries
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": UA, "Accept-Language": "ar,en;q=0.8"})
+def clean_url(u: str) -> str:
+    u = (u or "").strip()
+    if not u:
+        return u
+    u = unredirect_ddg(u)
+    # إزالة تتبّعات شائعة
+    for k in ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ved"]:
+        u = re.sub(rf"([?&]){k}=[^&#]+", r"\1", u)
+    u = u.rstrip("?&")
+    return u
 
-    def ddgs_search(self, query: str, max_results: int) -> List[Dict]:
-        # نحاول عدة مرات مع backoff بسيط
-        for i in range(self.retries + 1):
-            try:
-                results = []
-                # DDGS يدير الـ session الداخلي؛ هنا لا نمرر session لتجنب تعارضات
-                with DDGS() as dd:
-                    for r in dd.text(query, max_results=max_results):
-                        results.append({
-                            "title": (r.get("title") or "").strip(),
-                            "snippet": (r.get("body") or "").strip(),
-                            "link": (r.get("href") or "").strip(),
-                        })
-                if results:
-                    return results
-            except Exception:
-                # انتظار عشوائي قصير ثم إعادة المحاولة
-                time.sleep(0.6 + 0.4 * i)
-        return []
+# ------------------------ محرك DuckDuckGo ----------------------
+def search_duckduckgo(query: str, k: int = MAX_RESULTS_PER_ENGINE) -> List[Dict]:
+    out = []
+    with DDGS() as dd:
+        for r in dd.text(query, max_results=k):
+            out.append({
+                "title": (r.get("title") or "").strip(),
+                "snippet": (r.get("body") or "").strip(),
+                "link": clean_url(r.get("href") or ""),
+                "src": "DuckDuckGo"
+            })
+    return out
 
-    def html_fallback(self, query: str, max_results: int) -> List[Dict]:
-        """Fallback عبر واجهة DuckDuckGo HTML (غير رسمية)."""
-        try:
-            # استخدام boole=1 لإجابات أكثر نصية، وkl=ar-ar للغة
-            url = "https://duckduckgo.com/html/"
-            params = {"q": query, "kl": "ar-ar"}
-            r = self.session.get(url, params=params, timeout=self.timeout)
+# ------------------------ محرك Bing (Scrape) -------------------
+def search_bing(query: str, k: int = MAX_RESULTS_PER_ENGINE) -> List[Dict]:
+    url = "https://www.bing.com/search?q=" + urllib.parse.quote(query)
+    out: List[Dict] = []
+    try:
+        with httpx.Client(headers=HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True) as cx:
+            resp = cx.get(url)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+            for a in soup.select("li.b_algo h2 a")[:k]:
+                title = (a.get_text() or "").strip()
+                link = clean_url(a.get("href") or "")
+                desc_el = a.find_parent("li").select_one("div.b_caption p")
+                snippet = (desc_el.get_text().strip() if desc_el else "")
+                if title and link:
+                    out.append({"title": title, "snippet": snippet, "link": link, "src": "Bing"})
+    except Exception:
+        pass
+    return out
+
+# ------------------------ Wikipedia API ------------------------
+def search_wikipedia(query: str, k: int = 3) -> List[Dict]:
+    lang = "ar" if is_arabic(query) else "en"
+    api = f"https://{lang}.wikipedia.org/w/api.php"
+    params = {"action": "opensearch", "search": query, "limit": str(k), "namespace": "0", "format": "json"}
+    out: List[Dict] = []
+    try:
+        with httpx.Client(headers=HEADERS, timeout=HTTP_TIMEOUT) as cx:
+            r = cx.get(api, params=params)
             r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            items, results = soup.select(".result"), []
-            for it in items:
-                a = it.select_one("a.result__a")
-                s = it.select_one(".result__snippet")
-                if not a:
-                    continue
-                results.append({
-                    "title": (a.get_text(strip=True) or "")[:180],
-                    "snippet": (s.get_text(" ", strip=True) if s else "")[:300],
-                    "link": a.get("href", "").strip(),
-                })
-                if len(results) >= max_results:
+            data = r.json()
+            titles = data[1] if len(data) > 1 else []
+            descs  = data[2] if len(data) > 2 else []
+            links  = data[3] if len(data) > 3 else []
+            for t, d, u in zip(titles, descs, links):
+                out.append({"title": t.strip(), "snippet": (d or "").strip(), "link": clean_url(u or ""), "src": "Wikipedia"})
+    except Exception:
+        pass
+    return out
+
+# ------------------------ Hacker News (Algolia API) --------------------------
+def search_hackernews(query: str, k: int = 5) -> List[Dict]:
+    url = "https://hn.algolia.com/api/v1/search"
+    out: List[Dict] = []
+    try:
+        with httpx.Client(headers=HEADERS, timeout=HTTP_TIMEOUT) as cx:
+            r = cx.get(url, params={"query": query, "hitsPerPage": str(k)})
+            r.raise_for_status()
+            data = r.json()
+            for h in data.get("hits", [])[:k]:
+                title = (h.get("title") or h.get("story_title") or "").strip()
+                link = (h.get("url") or h.get("story_url") or "").strip()
+                if title and link:
+                    out.append({
+                        "title": title,
+                        "snippet": (h.get("story_text") or "")[:180],
+                        "link": clean_url(link),
+                        "src": "HackerNews"
+                    })
+    except Exception:
+        pass
+    return out
+
+# ------------------------ Stack Overflow (StackExchange API) -----------------
+def search_stackoverflow(query: str, k: int = 5) -> List[Dict]:
+    url = "https://api.stackexchange.com/2.3/search/advanced"
+    out: List[Dict] = []
+    try:
+        with httpx.Client(headers=HEADERS, timeout=HTTP_TIMEOUT) as cx:
+            r = cx.get(url, params={
+                "order": "desc",
+                "sort": "relevance",
+                "q": query,
+                "site": "stackoverflow",
+                "pagesize": str(k)
+            })
+            r.raise_for_status()
+            data = r.json()
+            for item in data.get("items", [])[:k]:
+                title = (item.get("title") or "").strip()
+                link  = clean_url(item.get("link") or "")
+                if title and link:
+                    out.append({
+                        "title": title,
+                        "snippet": "سؤال/إجابة من StackOverflow",
+                        "link": link,
+                        "src": "StackOverflow"
+                    })
+    except Exception:
+        pass
+    return out
+
+# ------------------------ RSS عام (قابل للتخصيص) ----------------------------
+DEFAULT_RSS_FEEDS = [
+    "https://news.ycombinator.com/rss",
+    "https://arstechnica.com/feed/",
+    "https://www.theverge.com/rss/index.xml",
+    "https://www.aljazeera.net/aljazeeraalarabiaportal/rss",
+    "https://www.wired.com/feed/rss",
+]
+
+def search_rss(query: str, feeds: Optional[List[str]] = None, k: int = 5) -> List[Dict]:
+    feeds = feeds or DEFAULT_RSS_FEEDS
+    out: List[Dict] = []
+    qn = normalize_ar(query).lower()
+    try:
+        for feed_url in feeds:
+            fp = feedparser.parse(feed_url)
+            for entry in fp.entries[:20]:
+                title = normalize_ar((getattr(entry, "title", "") or "")).strip()
+                summary = normalize_ar((getattr(entry, "summary", "") or "")).strip()
+                link = clean_url((getattr(entry, "link", "") or "").strip())
+                text = f"{title} {summary}".lower()
+                if title and link and any(w in text for w in qn.split()):
+                    out.append({
+                        "title": title,
+                        "snippet": summary[:180],
+                        "link": link,
+                        "src": "RSS"
+                    })
+                if len(out) >= k:
                     break
-            return results
-        except Exception:
-            return []
+            if len(out) >= k:
+                break
+    except Exception:
+        pass
+    return out
 
-    def search(self, query: str, max_results: int = 6) -> List[Dict]:
-        # 1) DDGS أولاً
-        res = self.ddgs_search(query, max_results)
-        if res:
-            return res
-        # 2) Fallback HTML
-        return self.html_fallback(query, max_results)
+# ------------------------ (اختياري) Nitter (بديل تويتر) ---------------------
+# فعّل بتحديد NITTER_URL كمتغير بيئة (مثال: https://nitter.net)
+def search_nitter(query: str, k: int = 5) -> List[Dict]:
+    base = os.getenv("NITTER_URL", "").rstrip("/")
+    out: List[Dict] = []
+    if not base:
+        return out
+    try:
+        q = urllib.parse.quote(query)
+        url = f"{base}/search?f=tweets&q={q}"
+        with httpx.Client(headers=HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True) as cx:
+            resp = cx.get(url)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+            for art in soup.select("div.timeline-item")[:k]:
+                content = art.select_one(".tweet-content")
+                snippet = (content.get_text(" ", strip=True) if content else "")[:200]
+                link_el = art.select_one("a.tweet-date")
+                link = clean_url(urllib.parse.urljoin(base, link_el.get("href"))) if link_el else ""
+                if snippet and link:
+                    out.append({
+                        "title": snippet[:80] + ("…" if len(snippet) > 80 else ""),
+                        "snippet": snippet,
+                        "link": link,
+                        "src": "Nitter"
+                    })
+    except Exception:
+        pass
+    return out
 
-ws = WebSearcher()
-
-def web_search(query: str, max_results: int = 6) -> List[Dict]:
-    query = (query or "").strip()
-    if not query:
-        return []
-    return ws.search(query, max_results=max_results)
-
-# ================= تلخيص النتائج =================
-def _clean_lines(text: str, max_lines: int = 4) -> List[str]:
-    if not text:
-        return []
-    lines = [l.strip(" .\t\r\n") for l in text.splitlines()]
+# ------------------------ دمج النتائج وتلخيص -------------------
+def _clean_lines(text: str, max_lines: int = 2) -> List[str]:
+    if not text: return []
+    lines = [l.strip(" .\t\r\n") for l in text.splitlines() if l.strip()]
     lines = [l for l in lines if 15 <= len(l) <= 220]
     out, seen = [], set()
     for l in lines:
-        if l in seen:
-            continue
-        seen.add(l)
-        out.append(l)
-        if len(out) >= max_lines:
-            break
+        if l in seen: continue
+        seen.add(l); out.append(l)
+        if len(out) >= max_lines: break
     return out
+
+def multi_search(query: str) -> List[Dict]:
+    """تجميع نتائج من عدة محرّكات/مصادر مجانية."""
+    results: List[Dict] = []
+    # محرّكات عامة
+    try: results += search_duckduckgo(query)
+    except Exception: pass
+    try: results += search_bing(query)
+    except Exception: pass
+    # موسوعي
+    try: results += search_wikipedia(query)
+    except Exception: pass
+    # تقني/مجتمعي
+    try: results += search_hackernews(query)
+    except Exception: pass
+    try: results += search_stackoverflow(query)
+    except Exception: pass
+    # أخبار عامة عبر RSS
+    try: results += search_rss(query)
+    except Exception: pass
+    # (اختياري) شبكات اجتماعية عبر Nitter
+    try: results += search_nitter(query)
+    except Exception: pass
+
+    # إزالة التكرارات حسب الرابط
+    seen, uniq = set(), []
+    for r in results:
+        u = r.get("link") or ""
+        if u and u not in seen:
+            seen.add(u); uniq.append(r)
+    return uniq[:20]
 
 def compose_web_answer(question: str, results: List[Dict]) -> Dict:
     bullets, links = [], []
-    for r in results[:6]:
-        t = r.get("title") or ""
-        s = r.get("snippet") or ""
+    for r in results:
+        t = (r.get("title") or "").strip()
+        s = (r.get("snippet") or "").strip()
         u = r.get("link") or ""
-        if u:
-            links.append(u)
-        if 15 <= len(t) <= 140:
-            bullets.append(t.strip())
-        bullets.extend(_clean_lines(s, max_lines=2))
+        if u: links.append(u)
+        if 10 <= len(t) <= 140: bullets.append(t)
+        bullets.extend(_clean_lines(s, max_lines=1))
 
     clean, seen = [], set()
     for b in bullets:
-        if b and b not in seen:
-            seen.add(b)
-            clean.append(b)
-        if len(clean) >= 10:
-            break
+        if not b or b in seen: continue
+        seen.add(b); clean.append(b)
+        if len(clean) >= 10: break
 
     if not clean:
         return {
-            "answer": (
-                f"سؤالك: {question}\n\n"
-                "حاولت البحث في الويب لكن النتائج لم تكن متاحة الآن. "
-                "أعد المحاولة بعد دقائق أو غيّر صياغة سؤالك."
-            ),
-            "links": links[:5]
+            "answer": "بحثت في الويب ولم أحصل على نقاط واضحة. جرّب إعادة الصياغة أو أضف تفاصيل.",
+            "links": [clean_url(u) for u in links[:5]]
         }
 
-    head = f"سؤالك: {question}\n\nهذا ملخص مُنظم من عدة مصادر:\n"
+    head = f"سؤالك: {question}\n\nملخص من عدّة مصادر:\n"
     body = "\n".join([f"• {b}" for b in clean])
-    tail = ""
-    if links:
-        tail = "\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])
-    return {"answer": head + body + tail, "links": links[:5]}
 
-# ================= الواجهة الموحدة =================
+    uniq_links = []
+    for u in links:
+        u = clean_url(u)
+        if u and u not in uniq_links:
+            uniq_links.append(u)
+        if len(uniq_links) >= 5:
+            break
+    tail = "\n\nروابط للاستزادة:\n" + "\n".join([f"- {u}" for u in uniq_links]) if uniq_links else ""
+
+    return {"answer": head + body + tail, "links": uniq_links}
+
+# ------------------------ الواجهة الموحدة ----------------------
 def smart_answer(question: str) -> Tuple[str, Dict]:
     q = (question or "").strip()
     if not q:
         return "لم أستلم سؤالًا.", {"mode": "invalid"}
 
-    # 1) قاعدة المعرفة
+    # 1) ذاكرة محلية
     doc, score = local_search(q)
-    if doc and score >= 85:
+    if doc and score >= 87:
         return doc["a"], {"mode": "local", "score": score, "match": doc["q"]}
 
-    # 2) الويب (آمن)
-    results = web_search(q, max_results=6)
+    # 2) بحث متعدد المصادر
+    results = multi_search(q)
     if results:
         pack = compose_web_answer(q, results)
         return pack["answer"], {"mode": "web", "links": pack.get("links", [])}
 
-    # 3) fallback: أقرب ما لدينا
+    # 3) fallback عند فشل الشبكة
     if doc:
         return (
-            f"لم أجد إجابة مؤكدة من الويب الآن. أقرب سؤال عندي:\n«{doc['q']}».\n"
-            f"الجواب المخزن: {doc['a']}"
+            f"لم أجد إجابة مؤكدة عبر الويب.\nأقرب سؤال عندي:\n«{doc['q']}»\n"
+            f"الجواب المخزن: {doc['a']}\n\n"
+            "يمكنك حفظ جواب مُحسّن في القاعدة لتحسين الدقة لاحقًا."
         ), {"mode": "suggest", "score": score}
 
-    return (
-        "لا أملك معلومات كافية الآن، ولم أتمكن من الوصول لنتائج ويب. "
-        "جرّب لاحقًا أو أضف س/ج مشابه في قاعدة المعرفة.",
-    ), {"mode": "none"}
+    return "لا تتوفر معلومات كافية حاليًا. أعد صياغة سؤالك أو أضف س/ج مشابه في قاعدة المعرفة.", {"mode": "none"}
 
 def save_to_knowledge(q: str, a: str) -> None:
     q = (q or "").strip()
