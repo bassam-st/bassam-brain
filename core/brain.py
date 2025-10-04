@@ -1,75 +1,155 @@
-# core/brain.py
-from __future__ import annotations
+# عقل مزدوج: قاعدة معرفة محلية + بحث ويب بتلخيص وروابط منظّمة
 from typing import List, Dict, Tuple
+from pathlib import Path
 import re
-from rapidfuzz import fuzz
-from .search_engines import google_search, bing_search, wikipedia_search, ddg_fallback, social_search_links
+
+from rapidfuzz import fuzz, process
+from duckduckgo_search import DDGS
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+KB_FILE = DATA_DIR / "knowledge.txt"
+
+# ملف معرفة مبدئي
+if not KB_FILE.exists():
+    KB_FILE.write_text(
+        "سؤال: ما فوائد القراءة؟\n"
+        "جواب: القراءة توسّع المدارك وتقوّي الخيال وتزيد الثقافة.\n"
+        "---\n", encoding="utf-8"
+    )
 
 AR_DIAC  = re.compile(r'[\u064B-\u0652]')
 TOKEN_RE = re.compile(r'[A-Za-z\u0621-\u064A0-9]+')
 
-def _norm(s: str) -> str:
+
+def normalize_ar(s: str) -> str:
     s = s or ""
     s = AR_DIAC.sub("", s)
-    s = s.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ى","ي").replace("ة","ه")
-    return re.sub(r"\s+"," ", s).strip()
+    s = s.replace("أ","ا").replace("إ","ا").replace("آ","ا")
+    s = s.replace("ة","ه").replace("ى","ي").replace("ؤ","و").replace("ئ","ي")
+    s = re.sub(r"\s+"," ", s).strip()
+    return s
+
+def tokens(s: str) -> List[str]:
+    return TOKEN_RE.findall(normalize_ar(s))
+
+def load_qa() -> List[Dict]:
+    text = KB_FILE.read_text(encoding="utf-8")
+    blocks = [b.strip() for b in text.split("---") if b.strip()]
+    out = []
+    for b in blocks:
+        m1 = re.search(r"سؤال\s*:\s*(.+)", b)
+        m2 = re.search(r"جواب\s*:\s*(.+)", b)
+        if m1 and m2:
+            out.append({"q": m1.group(1).strip(), "a": m2.group(1).strip()})
+    return out
+
+QA = load_qa()
+VOCAB = {w.lower() for qa in QA for w in tokens(qa["q"]+" "+qa["a"]) if len(w)>2}
+
+def correct_spelling_ar(text: str) -> str:
+    toks = tokens(text)
+    out=[]
+    for w in toks:
+        lw=w.lower()
+        if lw in VOCAB or len(lw)<=2:
+            out.append(lw); continue
+        cand = process.extractOne(lw, VOCAB, scorer=fuzz.WRatio)
+        out.append(cand[0] if cand and cand[1]>=90 else lw)
+    return " ".join(out)
+
+def local_search(q: str) -> Tuple[Dict, float]:
+    if not QA: return (None, 0.0)
+    qn = correct_spelling_ar(q)
+    best,score=None,0.0
+    for qa in QA:
+        s = fuzz.token_set_ratio(qn, normalize_ar(qa["q"]))
+        if s>score:
+            best,score=qa,float(s)
+    return best,score
+
+# ———————— بحث الويب (نجلب نتائج + نصوص مقتطفة) ————————
+def web_search(query: str, max_results: int = 8) -> List[Dict]:
+    """نستخدم DuckDuckGo لجلب الروابط والعناوين (الأكثر استقراراً على Render)."""
+    results=[]
+    with DDGS() as dd:
+        for r in dd.text(query, max_results=max_results):
+            results.append({
+                "title": (r.get("title") or "").strip(),
+                "snippet": (r.get("body") or "").strip(),
+                "link": (r.get("href") or "").strip(),
+            })
+    return results
 
 def _clean_lines(text: str, max_lines: int = 2) -> List[str]:
     if not text: return []
-    lines = [l.strip(" .\t\r\n") for l in text.splitlines()] or [text.strip()]
-    lines = [l for l in lines if 15 <= len(l) <= 220]
-    seen, out = set(), []
+    lines=[l.strip(" .\t\r\n") for l in text.splitlines()]
+    lines=[l for l in lines if 15<=len(l)<=220]
+    out,seen=[],set()
     for l in lines:
         if l in seen: continue
         seen.add(l); out.append(l)
-        if len(out) >= max_lines: break
+        if len(out)>=max_lines: break
     return out
 
-def _summarize(results: List[Dict], question: str) -> str:
+def compose_web_answer(question: str, results: List[Dict]) -> Dict:
     bullets, links = [], []
-    for r in results[:8]:
-        if r.get("link"): links.append(r["link"])
-        t = r.get("title","").strip()
-        s = r.get("snippet","").strip()
-        if 12 <= len(t) <= 120: bullets.append(t)
-        bullets += _clean_lines(s, 1)
+    sources = []
+
+    for r in results[:12]:
+        t = (r.get("title") or "").strip()
+        s = (r.get("snippet") or "").strip()
+        u = (r.get("link") or "").strip()
+        if u:
+            links.append(u)
+            title = (t or s or u)[:120]
+            sources.append({"title": title, "url": u})
+        if 15 <= len(t) <= 140: bullets.append(t)
+        bullets.extend(_clean_lines(s, max_lines=1))
+
     # إزالة التكرار
-    seen, clean = set(), []
+    seen=set(); clean=[]
     for b in bullets:
         if b and b not in seen:
             seen.add(b); clean.append(b)
-        if len(clean) >= 10: break
-    head = f"سؤالك: {question}\n\nملخّص من عدة مصادر:\n"
-    body = "\n".join(f"• {b}" for b in clean) if clean else "• لم أعثر على نقاط واضحة كفاية."
-    if links:
-        body += "\n\nروابط للاستزادة:\n" + "\n".join(f"- {u}" for u in links[:6])
-    return head + body
+        if len(clean)>=10: break
 
-async def smart_answer(question: str, force_social: bool = False) -> Tuple[str, Dict]:
-    q = (question or "").strip()
+    if not clean:
+        return {
+            "answer": f"سؤالك: {question}\n\nلم أعثر على نقاط كافية للإجابة. جرّب إعادة صياغة سؤالك.",
+            "links": links[:5], "sources": sources
+        }
+
+    head=f"سؤالك: {question}\n\nهذا ملخص مُنظم من عدة مصادر:\n"
+    body="\n".join([f"• {b}" for b in clean])
+
+    return {"answer": head+body, "links": links[:5], "sources": sources}
+
+# ———————— واجهة موحدة ————————
+def smart_answer(question: str):
+    q=(question or "").strip()
     if not q:
-        return "لم أستلم سؤالًا.", {"mode": "invalid"}
+        return "لم أستلم سؤالًا.", {"mode":"invalid"}
 
-    # إذا طلب المستخدم اسم شخص/شركة -> أعرض روابط السوشال
-    if force_social or re.search(r"(تويتر|فيسبوك|انستقرام|سناب|يوتيوب|لينكد(?:إن)?|حساب|username|@)", q):
-        name = _norm(re.sub(r"(تويتر|فيسبوك|انستقرام|سناب|يوتيوب|لينكد.?ان|حساب)","",q)).strip()
-        if len(name) < 2: name = q
-        links = social_search_links(name)
-        txt = "بحث اجتماعي سريع (اختر المنصة):\n" + "\n".join([f"- {k}: {v}" for k,v in links.items()])
-        return txt, {"mode":"social", "name": name}
+    # 1) قاعدة المعرفة أولاً
+    doc,score=local_search(q)
+    if doc and score>=85:
+        return doc["a"], {"mode":"local", "score":score, "match":doc["q"]}
 
-    # ترتيب: Google -> Bing -> Wikipedia -> DDG (fallback)
-    results: List[Dict] = []
-    for fn in (google_search, bing_search, wikipedia_search, ddg_fallback):
-        try:
-            part = await fn(q, 6) if fn != wikipedia_search else await fn(q, 4)
-        except Exception:
-            part = []
-        results.extend(part)
-        if len(results) >= 6:
-            break
+    # 2) الويب (نجلب مصادر + نقاط)
+    results=web_search(q, max_results=8)
+    if results:
+        pack=compose_web_answer(q, results)
+        return pack["answer"], {"mode":"web", "links":pack["links"], "sources":pack["sources"]}
 
-    if not results:
-        return "لم أصل لنتائج كافية الآن. جرّب إعادة الصياغة أو حدّد كلمات أكثر.", {"mode":"none"}
+    # 3) fallback
+    if doc:
+        return (f"لم أجد إجابة مؤكدة. أقرب سؤال عندي:\n«{doc['q']}».\n"
+                f"الجواب المخزن: {doc['a']}"), {"mode":"suggest", "score":score}
+    return "لا أملك معلومات كافية بعد.", {"mode":"none"}
 
-    return _summarize(results, q), {"mode":"web", "sources": [r.get("link") for r in results[:6] if r.get("link")]}
+def save_to_knowledge(q: str, a: str) -> None:
+    q=(q or "").strip(); a=(a or "").strip()
+    if not q or not a: return
+    with KB_FILE.open("a", encoding="utf-8") as f:
+        f.write(f"\nسؤال: {q}\nجواب: {a}\n---\n")
