@@ -1,213 +1,259 @@
-# core/brain.py
-# =========================================================
-# Bassam Brain Pro v3.5 — بحث ذكي + تلخيص + سوشال + Deep Web
-# يعتمد على httpx + BeautifulSoup + lxml
-# =========================================================
-
+# -*- coding: utf-8 -*-
+# Bassam Brain – Web reasoning & summarization core (Arabic-first)
+# يعمل مجانًا: ويكيبيديا API + DuckDuckGo HTML
 from __future__ import annotations
-import re, asyncio, random
-from urllib.parse import quote_plus
+
+import re
+import math
+import random
+from urllib.parse import quote, unquote, urlparse
+from html import unescape
+
 import httpx
 from bs4 import BeautifulSoup
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
+# ============ أدوات مساعدة ============
 
-HEADERS = {"User-Agent": USER_AGENT, "Accept-Language": "ar,en;q=0.8"}
+HTTP_TIMEOUT = 18.0
+DUCK_HTML = "https://html.duckduckgo.com/html/?q="   # واجهة HTML خفيفة
+WIKI_OPEN = "https://{lang}.wikipedia.org/w/api.php"
+WIKI_SUMMARY = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 
-# ---------- أدوات مساعدة ----------
+AR_SENT_END = re.compile(r"[\.!\؟\!؟]+\s*")
+SPACES = re.compile(r"\s+")
 
-def _clean_text(t: str, max_len: int = 1200) -> str:
+def _clean_text(t: str) -> str:
     if not t:
         return ""
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:max_len]
+    t = unescape(t)
+    t = re.sub(r"\u200f|\u200e|\u202a|\u202b|\u202c|\u202d|\u202e", "", t)
+    t = SPACES.sub(" ", t).strip()
+    return t
 
-def _soup(html: str) -> BeautifulSoup:
-    return BeautifulSoup(html, "lxml")
-
-async def _fetch_text(client: httpx.AsyncClient, url: str, timeout=12) -> str:
+def _decode_url(u: str) -> str:
     try:
-        r = await client.get(url, timeout=timeout, headers=HEADERS, follow_redirects=True)
-        if r.status_code == 200:
-            return r.text
+        return unquote(u)
     except Exception:
+        return u
+
+def _dedup_keep_order(items, key=lambda x: x):
+    seen = set()
+    out = []
+    for it in items:
+        k = key(it)
+        if k in seen: 
+            continue
+        seen.add(k)
+        out.append(it)
+    return out
+
+def _take_top(xs, k):
+    return xs[:k] if len(xs) > k else xs
+
+# ============ جلب من ويكيبيديا ============
+
+async def _wiki_search(client: httpx.AsyncClient, query: str, lang: str = "ar", limit: int = 5):
+    params = {
+        "action": "opensearch",
+        "search": query,
+        "limit": str(limit),
+        "namespace": "0",
+        "format": "json",
+    }
+    url = WIKI_OPEN.format(lang=lang)
+    r = await client.get(url, params=params, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    data = r.json()
+    titles = data[1] or []
+    urls = data[3] or []
+    results = []
+    for t, u in zip(titles, urls):
+        results.append({
+            "title": _clean_text(t),
+            "url": _decode_url(u),
+            "engine": f"Wikipedia-{lang}"
+        })
+    return results
+
+async def _wiki_summary(client: httpx.AsyncClient, title: str, lang: str = "ar") -> str:
+    url = WIKI_SUMMARY.format(lang=lang, title=quote(title))
+    r = await client.get(url, timeout=HTTP_TIMEOUT)
+    if r.status_code != 200:
         return ""
+    j = r.json()
+    # بعض الصفحات تعطي extract أو description
+    for k in ("extract", "description"):
+        if k in j and j[k]:
+            return _clean_text(j[k])
     return ""
 
-def as_bullet_sources(urls: list[tuple[str, str]]) -> list[dict]:
-    # كل عنصر: {"title": "...", "url": "..."}
+# ============ جلب من DuckDuckGo (HTML) ============
+
+async def _ddg_search(client: httpx.AsyncClient, query: str, limit: int = 8):
+    url = DUCK_HTML + quote(query)
+    r = await client.get(url, timeout=HTTP_TIMEOUT, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119 Safari/537.36"
+    })
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "lxml")
     out = []
-    for title, url in urls[:12]:
-        out.append({"title": _clean_text(title, 120), "url": url})
-    return out
-
-# ---------- تحليل نوع السؤال ----------
-def detect_intent(q: str) -> str:
-    ql = q.strip()
-    if not ql:
-        return "general"
-    p = ql.lower()
-    if any(w in p for w in ["حساب", "يوزر", "يوزرز", "username", "user", "اكاونت"]):
-        return "social"
-    if any(w in p for w in ["من هو", "من هي", "ابحث عن شخص", "سيرة", "حياة", "twitter", "facebook", "instagram"]):
-        return "social"
-    if any(w in p for w in ["وزارة", "gov", "جهة", "جامعة", "تعليم", "نتيجة", "قبول"]):
-        return "gov"
-    return "general"
-
-# ---------- مولّد روابط السوشال (قابلة للنقر) ----------
-def build_social_links(name: str) -> list[dict]:
-    q = quote_plus(name)
-    links = [
-        ("Google", f"https://www.google.com/search?q={q}"),
-        ("Twitter / X", f"https://twitter.com/search?q={q}&f=user"),
-        ("Facebook", f"https://www.facebook.com/search/people/?q={q}"),
-        ("Instagram", f"https://www.instagram.com/explore/search/keyword/?q={q}"),
-        ("TikTok", f"https://www.tiktok.com/search/user?q={q}"),
-        ("LinkedIn", f"https://www.linkedin.com/search/results/people/?keywords={q}"),
-        ("Telegram", f"https://t.me/s/{q}"),
-        ("Reddit", f"https://www.reddit.com/search/?q={q}"),
-        ("YouTube", f"https://www.youtube.com/results?search_query={q}")
-    ]
-    return [{"name": n, "url": u} for n, u in links]
-
-# ---------- البحث: Google → Bing → Wikipedia ----------
-async def search_google(client: httpx.AsyncClient, q: str) -> list[tuple[str, str]]:
-    # ملاحظة: قد يمنع Google بعض الطلبات. لدينا سقوط على Bing تلقائيًا في app.py
-    html = await _fetch_text(client, f"https://www.google.com/search?q={quote_plus(q)}&hl=ar")
-    if not html:
-        return []
-    s = _soup(html)
-    results = []
-    for g in s.select("a"):
-        href = g.get("href") or ""
-        title = g.get_text(" ").strip()
-        # تجاهل الروابط الداخلية
-        if href.startswith("/url?q="):
-            url = href.split("/url?q=")[-1].split("&")[0]
-            if title and url.startswith("http"):
-                results.append((title, url))
-        if len(results) >= 8:
-            break
-    return results
-
-async def search_bing(client: httpx.AsyncClient, q: str) -> list[tuple[str, str]]:
-    html = await _fetch_text(client, f"https://www.bing.com/search?q={quote_plus(q)}&setlang=ar")
-    if not html:
-        return []
-    s = _soup(html)
-    results = []
-    for li in s.select("li.b_algo h2 a"):
-        url = li.get("href")
-        title = li.get_text(" ").strip()
-        if url and title:
-            results.append((title, url))
-        if len(results) >= 8:
-            break
-    return results
-
-async def search_wikipedia(client: httpx.AsyncClient, q: str) -> list[tuple[str, str]]:
-    html = await _fetch_text(client, f"https://ar.wikipedia.org/w/index.php?search={quote_plus(q)}")
-    if not html:
-        return []
-    s = _soup(html)
-    results = []
-    for a in s.select("ul.mw-search-results li a"):
-        href = a.get("href")
-        title = a.get_text(" ").strip()
-        if href and title:
-            url = "https://ar.wikipedia.org" + href
-            results.append((title, url))
-        if len(results) >= 6:
-            break
-    return results
-
-# ---------- Deep Web (سطحي آمن: ahmia) ----------
-async def search_deep_web(client: httpx.AsyncClient, q: str) -> list[tuple[str, str]]:
-    # ahmia.fi مفهرس لمواقع onion ويعمل عبر الويب السطحي
-    html = await _fetch_text(client, f"https://ahmia.fi/search/?q={quote_plus(q)}")
-    if not html:
-        return []
-    s = _soup(html)
-    out = []
-    for a in s.select("a"):
-        href = a.get("href") or ""
-        txt = a.get_text(" ").strip()
-        if ".onion" in href and txt:
-            out.append((txt, href))
-        if len(out) >= 5:
-            break
-    return out
-
-# ---------- جلب وقراءة صفحة للمُلخّص ----------
-async def fetch_and_summarize(client: httpx.AsyncClient, url: str, max_words: int = 120) -> str:
-    # r.jina.ai يُرجع صفحة نصية نظيفة قابلة للقراءة
-    page = await _fetch_text(client, f"https://r.jina.ai/http://{url.replace('https://','').replace('http://','')}")
-    page = _clean_text(page, 5000)
-    if not page:
-        return ""
-    # تلخيص بسيط: أخذ أهم الجُمل العربية/الإنجليزية الأولى
-    # (إصدار Pro موسّع لكن يبقى خفيفًا لخطّة Starter)
-    parts = re.split(r"(?<=[.!؟])\s+", page)
-    kept, count = [], 0
-    for sent in parts:
-        if len(sent) < 20:
+    # العناوين تظهر في a.result__a داخل div.result
+    for a in soup.select("a.result__a"):
+        href = a.get("href", "")
+        title = a.get_text(" ", strip=True)
+        if not href or not title:
             continue
-        kept.append("• " + sent.strip())
-        count += len(sent.split())
-        if count >= max_words:
+        # تجاهل روابط ddg الداخلية
+        if "duckduckgo.com" in urlparse(href).netloc:
+            continue
+        out.append({
+            "title": _clean_text(title),
+            "url": _decode_url(href),
+            "engine": "DuckDuckGo"
+        })
+        if len(out) >= limit:
             break
-    return "\n".join(kept) if kept else page[:800]
+    return out
 
-# ---------- نقطة التشغيل الرئيسية ----------
-async def smart_answer(q: str, force_social: bool = False) -> dict:
-    intent = detect_intent(q)
-    if force_social:
-        intent = "social"
+# ============ تلخيص عربي بسيط وفعّال ============
 
-    async with httpx.AsyncClient(headers=HEADERS) as client:
-        sources: list[tuple[str, str]] = []
-        answer = ""
-        social_links = []
+def _sent_split_ar(text: str):
+    # تقسيم جُمل عربي (تقريبي لكنه فعّال)
+    parts = AR_SENT_END.split(text)
+    sents = [s.strip() for s in parts if _clean_text(s)]
+    return sents
 
-        if intent == "social":
-            social_links = build_social_links(q)
-            # نبحث أيضاً بجوجل للحصول على روابط إضافية
-            results = await search_google(client, q)
-            if not results:
-                results = await search_bing(client, q)
-            sources = results or []
-            if sources:
-                answer = "‏هذه روابط سريعة لحسابات أو نتائج لها علاقة بالاسم المدخل. اختر المصدر الصحيح وافتحه."
-            else:
-                answer = "لم أعثر على حسابات واضحة. جرّب إضافة مدينة/دولة أو لقب."
+def _keywords(q: str):
+    q = _clean_text(q)
+    # حذف كلمات توقف عربية بسيطة
+    stop = set("ما ماذا لماذا كيف اين اينَ أين من في على عن إلى الى هل هو هي هم هن ثم أو او أم ان إن أن لو إذا اذا قد لقد هذا هذه ذلك تلك هناك هنا جدا جداً مثل لدى عند حتى كان كانت يكون تكون وغيرها اكثر أقل أي اى إحدى احد".split())
+    toks = [t for t in re.split(r"[^\w\u0600-\u06FF]+", q) if t]
+    toks = [t for t in toks if t not in stop and len(t) > 1]
+    return toks[:8]
 
-        else:
-            # ترتيب البحث: Google → Bing → Wikipedia → Deep Web
-            results = await search_google(client, q)
-            if not results:
-                results = await search_bing(client, q)
-            wiki = await search_wikipedia(client, q)
-            deep = await search_deep_web(client, q)
+def _score_sent(sent: str, kws):
+    if not sent:
+        return 0.0
+    s = sent.lower()
+    score = 0.0
+    for k in kws:
+        if k in s:
+            score += 1.0
+    score += min(len(sent)/120.0, 1.0) * 0.3  # مُكافأة لطول معتدل
+    return score
 
-            # حاول التلخيص من أول نتيجة موثوقة
-            candidate = (results or wiki or [])[:1]
-            if candidate:
-                _, url = candidate[0]
-                summary = await fetch_and_summarize(client, url)
-                answer = summary or "لم أتمكّن من توليد ملخّص، هذه بعض المصادر المفيدة."
-            else:
-                answer = "لم أجد نتيجة مباشرة. هذه بعض الروابط المفيدة للاطّلاع."
+def summarize_ar(text: str, query: str, max_lines: int = 6) -> str:
+    text = _clean_text(text)
+    if not text:
+        return ""
+    sents = _sent_split_ar(text)
+    if not sents:
+        return text
+    kws = _keywords(query)
+    scored = [(s, _score_sent(s, kws)) for s in sents]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top = [s for s, _ in _take_top(scored, max_lines)]
+    # ترتيب الظهور الأصلي للحفاظ على سياق منطقي
+    order = {s: i for i, s in enumerate(sents)}
+    top.sort(key=lambda s: order.get(s, 10**9))
+    bullets = ["• " + s for s in top]
+    return "\n".join(bullets)
 
-            # دمج المصادر مع وضع أولوية
-            sources = (results[:6]) + (wiki[:4]) + (deep[:3])
+# ============ توليف الإجابة ============
 
-        return {
-            "intent": intent,
-            "answer": _clean_text(answer, 3000),
-            "sources": as_bullet_sources(sources),
-            "social": social_links,
-        }
+async def smart_answer(query: str, lang: str = "ar", max_sources: int = 8) -> dict:
+    """
+    يُرجع: {"answer": نص مُلخّص, "sources":[{"title":..., "url":...}, ...]}
+    """
+    query = _clean_text(query)
+    if not query:
+        return {"answer": "اكتب سؤالك أولًا.", "sources": []}
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT) as client:
+        # 1) ويكيبيديا أولًا (حسب اللغة)
+        wiki_hits = []
+        try:
+            wiki_hits = await _wiki_search(client, query, lang=lang, limit=4)
+        except Exception:
+            wiki_hits = []
+
+        wiki_texts = []
+        for h in wiki_hits:
+            try:
+                t = await _wiki_summary(client, h["title"], lang=lang)
+                if t:
+                    wiki_texts.append(t)
+            except Exception:
+                pass
+
+        # 2) محرك عام مجّاني (DuckDuckGo HTML)
+        ddg_hits = []
+        try:
+            ddg_hits = await _ddg_search(client, query, limit=8)
+        except Exception:
+            ddg_hits = []
+
+    # دمج وتنظيف مصادر
+    sources = wiki_hits + ddg_hits
+    sources = _dedup_keep_order(sources, key=lambda d: d.get("url", "").split("#")[0])
+    sources = _take_top(sources, max_sources)
+
+    # نص للملخص
+    corpus = " ".join(wiki_texts)
+    if not corpus and sources:
+        # سنجلب مقتطفًا قصيرًا من بعض الصفحات (اختياري خفيف)
+        # لتفادي الكشط الثقيل، سنكتفي بأخذ العنوانين لعمل ملخص سريع.
+        titles_join = " ".join([s["title"] for s in sources[:5]])
+        corpus = f"{titles_join}. "
+
+    answer = summarize_ar(corpus, query, max_lines=6) if corpus else ""
+    if not answer:
+        answer = "لم أعثر على إجابة مؤكدة بعد، لكن أدرجت لك أهم الروابط الموثوقة للاطلاع."
+
+    # إعادة هيكلة المصادر (عنوان نظيف + رابط مفكوك)
+    final_sources = []
+    for s in sources:
+        title = _clean_text(s.get("title") or "")
+        url = _decode_url(s.get("url") or "")
+        if not url:
+            continue
+        if not title:
+            # fallback من الدومين/المسار
+            p = urlparse(url)
+            title = p.netloc or url
+        final_sources.append({"title": title, "url": url})
+
+    return {"answer": answer, "sources": final_sources}
+
+# ============ ربط حفظ محلي (اختياري) ============
+
+def save_to_knowledge(question: str, user_answer: str) -> dict:
+    """
+    ضع هنا منطق الحفظ المحلي إن رغبت (ملف JSON أو DB).
+    تُعاد بنية بسيطة للواجهة.
+    """
+    q = _clean_text(question)
+    a = _clean_text(user_answer)
+    # مثال مبسّط بدون تخزين فعلي:
+    return {"ok": True, "saved": True, "q": q, "a": a}
+
+# ============ بحث اجتماعي – روابط منصات (اختياري للاستخدام من الـ API) ============
+
+SOCIAL_PATTERNS = {
+    "google": "https://www.google.com/search?q={q}",
+    "twitter": "https://twitter.com/search?q={q}&f=user",
+    "facebook": "https://www.facebook.com/search/people/?q={q}",
+    "instagram": "https://www.instagram.com/explore/search/keyword/?q={q}",
+    "tiktok": "https://www.tiktok.com/search/user?q={q}",
+    "linkedin": "https://www.linkedin.com/search/results/people/?keywords={q}",
+    "telegram": "https://t.me/s/{q}",
+    "reddit": "https://www.reddit.com/search/?q={q}",
+    "youtube": "https://www.youtube.com/results?search_query={q}",
+}
+
+def social_links(name: str) -> list[dict]:
+    q = quote(_clean_text(name))
+    out = []
+    for k, pat in SOCIAL_PATTERNS.items():
+        out.append({"platform": k, "url": pat.format(q=q)})
+    return out
