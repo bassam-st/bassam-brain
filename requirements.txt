@@ -1,19 +1,44 @@
-# ==== Bassam v4.0 Full-AI ====
+# ==== Bassam الذكي v3.5 Pro ====
+
+# Web Framework
 fastapi==0.110.0
 uvicorn==0.23.2
 jinja2==3.1.3
-aiofiles==23.2.1
-python-multipart==0.0.9
 
-# Web & scraping
+# Web & Scraping
 httpx==0.27.0
 beautifulsoup4==4.12.3
 lxml==5.2.2
 readability-lxml==0.8.1
-markdownify==0.12.1
-duckduckgo_search==6.2.6
+duckduckgo-search==5.3.1
 
-# Arabic utils (اختياري لكنها خفيفة)
-langdetect==1.0.9
-rapidfuzz==3.6.1
+# Math & Science
 sympy==1.12
+
+# Caching & Utilities
+diskcache==5.6.3
+python-dateutil==2.9.0
+pytz==2024.1
+
+# File Handling
+aiofiles==23.2.1
+python-multipart==0.0.9
+
+# Text Processing & Summarization
+sumy==0.11.0
+regex==2024.5.10
+
+# Translation & Language
+deep-translator==1.11.4
+langdetect==1.0.9
+
+# Data & AI
+numpy==1.26.4
+tqdm==4.66.4
+
+# Security & Web
+requests==2.31.0
+urllib3==2.2.3
+
+# Optional (Logging & Debug)
+colorama==0.4.6
