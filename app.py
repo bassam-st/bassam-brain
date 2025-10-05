@@ -1,69 +1,49 @@
+# ==== app.py — Bassam الذكي ====
 import os
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core.engine import smart_search
-from core.social import build_social_links, build_comment_links
-from core.summarize import smart_summarize
-from core.math_solver import explain_math_ar
+from core.brain import smart_answer          # يجب أن يقبل force_social
+from core.math_solver import explain_math_answer
 
-app = FastAPI(title="Bassam v4.0 Full-AI")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = FastAPI(title="Bassam الذكي — بحث عميق وذكاء شامل")
+
+# مجلدات الواجهة
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "answer": None, "sources": [], "social_links": [],
-         "comment_links": [], "q": "", "elapsed": None, "page": 1, "pages": 1,
-         "math_mode": False}
-    )
+    return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/search", response_class=HTMLResponse)
-async def search(
-    request: Request,
-    q: str = Form(...),
-    enable_social: str | None = Form(None),
-    enable_comments: str | None = Form(None),
-    enable_math: str | None = Form(None),
-    page: int = Form(1),
-):
+@app.post("/search")
+async def search(request: Request):
+    data = await request.json()
+    q = data.get("q", "").strip()
+    force_social = bool(data.get("force_social", False))
+    if not q:
+        return JSONResponse({"ok": False, "error": "empty_query"})
     try:
-        # أولوية وضع الرياضيات إن تم تفعيله
-        if enable_math:
-            answer = explain_math_ar(q)
-            return templates.TemplateResponse(
-                "index.html",
-                {"request": request, "q": q, "answer": answer, "sources": [],
-                 "social_links": build_social_links(q) if enable_social else [],
-                 "comment_links": build_comment_links(q) if enable_comments else [],
-                 "elapsed": None, "page": 1, "pages": 1, "math_mode": True}
-            )
-
-        # بحث ويب عادي
-        result = await smart_search(q, page=page, per_page=10)
-        answer = smart_summarize(q, result.texts)
-
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "q": q, "answer": answer,
-             "sources": result.sources,
-             "social_links": build_social_links(q) if enable_social else [],
-             "comment_links": build_comment_links(q) if enable_comments else [],
-             "elapsed": result.elapsed_ms, "page": result.page, "pages": result.pages,
-             "math_mode": False}
-        )
+        answer, sources = await smart_answer(q, force_social=force_social)
+        return JSONResponse({"ok": True, "answer": answer, "sources": sources})
     except Exception as e:
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "q": q, "answer": f"حدث خطأ: {e}", "sources": [],
-             "social_links": [], "comment_links": [], "elapsed": None,
-             "page": 1, "pages": 1, "math_mode": False}
-        )
+        return JSONResponse({"ok": False, "error": str(e)})
 
-@app.get("/health")
-async def health():
-    return {"ok": True}
+@app.post("/solve_math")
+async def solve_math(request: Request):
+    data = await request.json()
+    q = data.get("q", "").strip()
+    if not q:
+        return JSONResponse({"ok": False, "error": "empty_query"})
+    try:
+        solution = explain_math_answer(q)
+        return JSONResponse({"ok": True, "solution": solution})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
