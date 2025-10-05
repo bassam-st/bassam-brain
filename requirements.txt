@@ -1,4 +1,4 @@
-# ==== Bassam v3.5 Pro ====
+# ==== Bassam v3.6 Pro (Web + Social) ====
 fastapi==0.110.0
 uvicorn==0.23.2
 jinja2==3.1.3
@@ -11,5 +11,5 @@ lxml==5.2.2
 # Static files (Starlette)
 aiofiles==23.2.1
 
-# إرسال نماذج (اختياري)
+# اختياري (لو سترفع ملفات عبر فورم)
 python-multipart==0.0.9
