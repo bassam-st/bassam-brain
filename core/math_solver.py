@@ -1,79 +1,74 @@
-from __future__ import annotations
+# -*- coding: utf-8 -*-
+# core/math_solver.py
 from sympy import symbols, Eq, simplify, factor, expand, diff, integrate, solve, sympify
-from sympy.parsing.sympy_parser import parse_expr
 
-def _fmt(step: str) -> str:
-    return f"• {step}"
-
-def explain_math_ar(expr_text: str) -> str:
+def explain_math_answer(expr_text: str) -> str:
     """
-    يكتشف نوع المسألة تلقائياً (تبسيط/تفكيك/توسيع/مشتقة/تكامل/حل معادلة)
-    ويعرض خطوات موجزة بالعربية.
-    الأمثلة:
-      تبسيط:  simplify: (x^2 + 2*x + 1)/(x+1)
-      تفكيك:  factor: x^2-1
-      توسيع:  expand: (x+1)^3
-      مشتقة:  diff: x^3 + 2*x
-      تكامل:  integrate: x^2
-      حل معادلة: solve: x^2-5*x+6=0
+    يحاول فهم المسألة (تبسيط/تحليل/حل/تفاضل/تكامل) حسب الكلمات المفتاحية داخل النص.
+    أمثلة:
+      "بسط (x^2 - 1)/(x-1)"
+      "حل المعادلة x^2 - 5x + 6 = 0"
+      "حل للمتغير x: 2*x + 3 = 7"
+      "حل جهاز المعادلات: x + y = 3, x - y = 1"
+      "فرّق x^3"
+      "كامل x"
     """
-    expr_text = expr_text.strip()
+    x, y, z = symbols("x y z")
+    t = expr_text.strip()
 
-    # نمط الأوامر
-    modes = ("simplify:", "factor:", "expand:", "diff:", "integrate:", "solve:")
-    mode = None
-    for m in modes:
-        if expr_text.lower().startswith(m):
-            mode = m[:-1]
-            expr_text = expr_text[len(m):].strip()
-            break
+    def _fmt(value):
+        try:
+            return str(value)
+        except Exception:
+            return repr(value)
 
-    x, y, z = symbols("x y z")  # متغيرات شائعة
-    steps = []
+    # حالة جهاز معادلات بسيط
+    if "جهاز" in t or "نظام" in t or ("=" in t and "," in t and ":" not in t):
+        try:
+            parts = [p for p in t.split(",") if "=" in p]
+            eqs = []
+            for p in parts:
+                left, right = p.split("=")
+                eqs.append(Eq(sympify(left), sympify(right)))
+            sol = solve(eqs, dict=True)
+            return f"حل جهاز المعادلات:\n{_fmt(sol)}"
+        except Exception as e:
+            return f"تعذّر تحليل جهاز المعادلات: {e}"
 
-    try:
-        if mode in (None, "simplify", "factor", "expand"):
-            expr = parse_expr(expr_text, evaluate=False)
-            steps.append(_fmt(f"التعبير الأصلي: {expr}"))
+    # تفاضل
+    if any(k in t for k in ["فرق", "تفاضل", "مشتقة"]) or t.startswith("فرّق"):
+        try:
+            expr = sympify(t.split(":", 1)[-1] if ":" in t else t.replace("فرّق", "").strip())
+            return f"المشتقة: d/dx {expr} = {diff(expr)}"
+        except Exception as e:
+            return f"تعذّر التفاضل: {e}"
 
-            if mode == "simplify" or mode is None:
-                s = simplify(expr)
-                steps.append(_fmt(f"التبسيط: {s}"))
-            if mode == "factor" or mode is None:
-                f = factor(expr)
-                steps.append(_fmt(f"التفكيك لعوامل: {f}"))
-            if mode == "expand" or mode is None:
-                e = expand(expr)
-                steps.append(_fmt(f"التوسيع: {e}"))
+    # تكامل
+    if any(k in t for k in ["كامل", "تكامل"]):
+        try:
+            expr = sympify(t.split(":", 1)[-1] if ":" in t else t.replace("كامل", "").strip())
+            return f"التكامل: ∫ {expr} dx = {integrate(expr)} + C"
+        except Exception as e:
+            return f"تعذّر التكامل: {e}"
 
-        elif mode == "diff":
-            expr = parse_expr(expr_text, evaluate=False)
-            steps.append(_fmt(f"التعبير: {expr}"))
-            d = diff(expr, x)
-            steps.append(_fmt(f"المشتقة بالنسبة لـ x: {d}"))
-
-        elif mode == "integrate":
-            expr = parse_expr(expr_text, evaluate=False)
-            steps.append(_fmt(f"التعبير: {expr}"))
-            I = integrate(expr, x)
-            steps.append(_fmt(f"التكامل (غير المحدد): {I} + C"))
-
-        elif mode == "solve":
-            # صيغة: left=right أو كثير حدود = 0
-            if "=" in expr_text:
-                left, right = expr_text.split("=", 1)
-                left, right = parse_expr(left, evaluate=False), parse_expr(right, evaluate=False)
-                eq = Eq(left, right)
-            else:
-                eq = Eq(parse_expr(expr_text, evaluate=False), 0)
-            steps.append(_fmt(f"المعادلة: {eq}"))
+    # حل معادلة
+    if "حل" in t and "=" in t:
+        try:
+            left, right = t.split("=", 1)
+            eq = Eq(sympify(left.replace("حل", "").strip()), sympify(right.strip()))
             sol = solve(eq)
-            steps.append(_fmt(f"الحلول: {sol}"))
+            return f"حل المعادلة {eq}:\n{_fmt(sol)}"
+        except Exception as e:
+            return f"تعذّر حل المعادلة: {e}"
 
-        else:
-            return "لم أتعرف على نوع المسألة. استعمل: simplify:/factor:/expand:/diff:/integrate:/solve:"
-
+    # تبسيط/تحليل/توسيع بحسب كلمات
+    try:
+        expr = sympify(t)
+        steps = []
+        steps.append(f"التعبير الأصلي: {expr}")
+        steps.append(f"تبسيط: {simplify(expr)}")
+        steps.append(f"تحليل: {factor(expr)}")
+        steps.append(f"توسيع: {expand(expr)}")
         return "\n".join(steps)
-
     except Exception as e:
-        return f"تعذّر التحليل الرياضي: {e}"
+        return f"تعذّر فهم المسألة: {e}"
