@@ -16,3 +16,4 @@ duckduckgo_search==6.2.6
 # Arabic utils (اختياري لكنها خفيفة)
 langdetect==1.0.9
 rapidfuzz==3.6.1
+sympy==1.12
