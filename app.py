@@ -1,46 +1,81 @@
-# app.py
-# =========================================================
-# FastAPI + Jinja2 — واجهة تطبيق "بسام الذكي"
-# =========================================================
-
+import os
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-import asyncio
+from fastapi.templating import Jinja2Templates
 
-from core.brain import smart_answer
+from core.engine import smart_search
+from core.social import build_social_links
+from core.summarize import smart_summarize
 
-app = FastAPI(title="Bassam Brain Pro v3.5", version="3.5")
+app = FastAPI(title="Bassam v4.0 Full-AI")
 
-# السماح بواجهة المتصفح
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
-
-# القوالب
-env = Environment(
-    loader=FileSystemLoader("templates"),
-    autoescape=select_autoescape(["html", "xml"])
-)
+# Static & templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    tpl = env.get_template("index.html")
-    return tpl.render()
+async def home(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "answer": None,
+            "sources": [],
+            "social_links": [],
+            "q": "",
+            "elapsed": None,
+            "page": 1,
+            "pages": 1,
+        },
+    )
 
-@app.post("/search")
-async def search(q: str = Form(...), social: str = Form("off")):
+@app.post("/search", response_class=HTMLResponse)
+async def search(
+    request: Request,
+    q: str = Form(...),
+    enable_social: str | None = Form(None),
+    page: int = Form(1),
+):
     try:
-        force_social = (social == "on")
-        data = await smart_answer(q.strip(), force_social=force_social)
-        return JSONResponse(data)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        # 1) Web search
+        result = await smart_search(q, page=page, per_page=10)
 
-# ملاحظة: لا تنشئ main.py — مدخل التشغيل هو app:app
-# أمر التشغيل على Render:
-# uvicorn app:app --host 0.0.0.0 --port $PORT
+        # 2) Summarize answer (من النصوص المتاحة)
+        answer = smart_summarize(q, result.texts)
+
+        # 3) Social (روابط قابلة للنقر فقط — بدون كشط)
+        social_links = build_social_links(q) if enable_social else []
+
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "q": q,
+                "answer": answer,
+                "sources": result.sources,  # [{title,url,site}]
+                "social_links": social_links,  # [(name,url)]
+                "elapsed": result.elapsed_ms,
+                "page": result.page,
+                "pages": result.pages,
+            },
+        )
+    except Exception as e:
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "q": q,
+                "answer": f"حدث خطأ: {str(e)}",
+                "sources": [],
+                "social_links": [],
+                "elapsed": None,
+                "page": 1,
+                "pages": 1,
+            },
+        )
+
+# صحة الخدمة
+@app.get("/health")
+async def health():
+    return {"ok": True}
