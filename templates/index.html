@@ -11,13 +11,23 @@
     <h1>بسام الذكي 🔎 — بحث عميق وتلخيص تلقائي</h1>
 
     <form method="post" action="/search" class="search-box">
-      <label class="switch">
-        <input type="checkbox" name="enable_social" {{ 'checked' if request.query_params.get('enable_social') else '' }}/>
-        <span>تفعيل البحث الاجتماعي (أسماء/حسابات)</span>
-      </label>
+      <div class="switches">
+        <label class="switch">
+          <input type="checkbox" name="enable_social"/>
+          <span>تفعيل البحث الاجتماعي (أسماء/حسابات)</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" name="enable_comments"/>
+          <span>روابط نقاشات/تعليقات (Twitter/Reddit/YouTube...)</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" name="enable_math"/>
+          <span>وضع الرياضيات (شرح خطوة بخطوة)</span>
+        </label>
+      </div>
 
       <div class="row">
-        <input class="q" name="q" placeholder="اكتب سؤالك هنا…" value="{{ q or '' }}" required/>
+        <input class="q" name="q" placeholder="اكتب سؤالك هنا… أو مثال: solve: x^2-5*x+6=0" value="{{ q or '' }}" required/>
         <button type="submit">إرسال</button>
       </div>
 
@@ -26,7 +36,7 @@
 
     {% if answer %}
     <section class="answer">
-      <h2>الإجابة:</h2>
+      <h2>{{ 'الشرح الرياضي:' if math_mode else 'الإجابة:' }}</h2>
       <pre>{{ answer }}</pre>
       {% if elapsed %}<div class="elapsed">⏱️ الوقت: {{ elapsed }}ms</div>{% endif %}
     </section>
@@ -43,7 +53,18 @@
     </section>
     {% endif %}
 
-    {% if sources %}
+    {% if comment_links and q %}
+    <section class="social">
+      <h3>روابط نقاشات/تعليقات:</h3>
+      <ul class="link-list">
+        {% for name,url in comment_links %}
+          <li><a href="{{ url }}" target="_blank" rel="noopener">{{ name }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if sources and not math_mode %}
     <section class="sources">
       <h3>المصادر:</h3>
       <ol>
@@ -62,6 +83,8 @@
               <input type="hidden" name="q" value="{{ q }}">
               <input type="hidden" name="page" value="{{ page - 1 }}">
               <button>&laquo; السابق</button>
+              <input type="hidden" name="enable_social" value="{{ 'on' if social_links else '' }}">
+              <input type="hidden" name="enable_comments" value="{{ 'on' if comment_links else '' }}">
             </form>
           {% endif %}
           <span>صفحة {{ page }} / {{ pages }}</span>
@@ -70,6 +93,8 @@
               <input type="hidden" name="q" value="{{ q }}">
               <input type="hidden" name="page" value="{{ page + 1 }}">
               <button>التالي &raquo;</button>
+              <input type="hidden" name="enable_social" value="{{ 'on' if social_links else '' }}">
+              <input type="hidden" name="enable_comments" value="{{ 'on' if comment_links else '' }}">
             </form>
           {% endif %}
         </div>
