@@ -1,48 +1,82 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <meta name="theme-color" content="#0f172a"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <meta name="theme-color" content="#0b0f19" />
 </head>
+
 <body>
-  <main class="container">
-    <h1>بسام الذكي — 🔎 بحث عميق وتلخيص تلقائي</h1>
+  <header class="top">
+    <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
+  </header>
 
-    <section class="card">
-      <form method="post" action="/search">
-        <label class="inline">
-          <input type="checkbox" name="include_prices">
-          روابط الأسعار
-        </label>
-        <input class="input" name="q" placeholder="اكتب سؤالك..." required>
-        <button class="btn" type="submit">بحث</button>
-      </form>
-    </section>
+  <section class="card">
+    <form method="post" action="/search" class="row">
+      <input name="q" placeholder="اكتب سؤالك هنا..." required />
+      <label class="chk">
+        <input type="checkbox" name="include_prices" /> روابط الأسعار
+      </label>
+      <button type="submit">بحث</button>
+    </form>
+  </section>
 
-    <section class="card">
-      <h2>بحث بالصورة (كاميرا/ملفات)</h2>
-      <form method="post" action="/search_image" enctype="multipart/form-data">
-        <input class="input" type="file" name="image" accept="image/*" capture="environment" required>
-        <button class="btn" type="submit">ارفع الصورة وابحث</button>
-      </form>
-      <small>بعد الرفع ستظهر أزرار تفتح لك البحث مباشرة في Google Lens أو Bing Visual Search…</small>
-    </section>
+  {% if error %}
+  <div class="card error">⚠️ {{ error }}</div>
+  {% endif %}
 
-    <footer>
-      <a href="/admin">لوحة الإدارة</a> • Bassam AI © 2025
-    </footer>
-  </main>
+  {% if message %}
+  <div class="card msg">{{ message }}</div>
+  {% endif %}
 
-  <!-- تسجيل Service Worker للتثبيت كـ PWA -->
-  <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/static/sw.js").catch(()=>{});
-      });
-    }
-  </script>
+  <!-- نتائج البحث -->
+  {% if results %}
+  <section class="card">
+    <h3>نتائج البحث ({{ engine_used }})</h3>
+    <ul>
+      {% for r in results %}
+      <li>
+        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+        <p>{{ r.snippet }}</p>
+        <span class="src">📘 {{ r.source }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <!-- رفع الصور -->
+  <section class="card">
+    <h3>بحث بالصورة (كاميرا / ملفات)</h3>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept="image/*" capture="environment" required />
+      <button type="submit">📷 ارفع الصورة وابحث</button>
+    </form>
+  </section>
+
+  {% if uploaded_image %}
+  <section class="card">
+    <h3>نتائج العدسات 🔍</h3>
+    <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:100%;border-radius:12px;" />
+
+    <div class="lens-links">
+      {% if google_lens %}
+      <a href="{{ google_lens }}" class="lens-btn" target="_blank">🔎 بحث Google Lens</a>
+      {% endif %}
+      {% if bing_visual %}
+      <a href="{{ bing_visual }}" class="lens-btn" target="_blank">🖼️ بحث Bing Visual</a>
+      {% endif %}
+      {% if yandex_search %}
+      <a href="{{ yandex_search }}" class="lens-btn" target="_blank">🌐 بحث Yandex Images</a>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <footer>
+    <p>© Bassam AI 2025 — جميع الحقوق محفوظة</p>
+  </footer>
 </body>
 </html>
