@@ -1,114 +1,145 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>مساعدك بسام الذكي / ALSHOTAIMI</title>
+# brain/omni_brain.py
+# مولد إجابة عربي بدون LLM مدفوع — تجميعي/تلخيصي من نتائج البحث
+from __future__ import annotations
+import re
+from typing import List, Dict
 
-  <!-- PWA (اختياري لو أضفناها لاحقًا) -->
-  <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#0b0f19" />
-  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
-  <meta name="apple-mobile-web-app-capable" content="yes">
+# ====== فلتر إباحي صارم ======
+HARAM_WORDS = {
+    # عربي
+    "اباحي","اباحية","جنس","جنسية","مثير","مثيره","مواقعباحية","مواقع اباحية","صوراباحية",
+    "افلام اباحية","سكس","سحاق","لواط","ممارسة جنسية","مضاجعة","اغراء","فحص العذرية",
+    # إنجليزي شائع
+    "porn","porno","sex","xxx","nsfw","nude","naked","onlyfans","camgirl","strip",
+}
+def _is_haram(q: str) -> bool:
+    qn = re.sub(r"\s+", "", q.lower())
+    for w in HARAM_WORDS:
+        if w.replace(" ", "") in qn:
+            return True
+    return False
+# =================================
 
-  <link rel="stylesheet" href="/static/style.css" />
-  <style>
-    body{font-family:system-ui,Tahoma; background:#0b0f19; color:#eaeef8; margin:0; padding:16px;}
-    .container{max-width:980px; margin:0 auto;}
-    .card{background:#101625; border:1px solid #182033; border-radius:16px; padding:16px; margin:12px 0;}
-    .row{display:flex; gap:8px; flex-wrap:wrap;}
-    input,button{border-radius:12px; border:1px solid #223; background:#0e1422; color:#eaeef8;}
-    input{padding:10px 12px; flex:1; min-width:200px;}
-    button{background:#7b6cff; border:0; padding:10px 16px; cursor:pointer;}
-    .muted{color:#9bb1d0; font-size:13px}
-    .answer{white-space:pre-wrap; line-height:1.8; margin-top:10px}
-    .sources a{color:#7fb2ff; text-decoration:underline; word-break:break-all;}
-    .badge{display:inline-block; background:#0d2037; border:1px solid #243555; padding:6px 10px; border-radius:10px; font-size:13px}
-    h1{margin:0 0 6px}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header class="card">
-      <h1>مساعدك <b>بسام</b> الذكي / <span class="badge">ALSHOTAIMI</span></h1>
-      <p class="muted">مرحبًا! أنا بسام لمساعدتك 👋 — اكتب سؤالك بالعربية وسأبحث وألخّص من مصادر موثوقة. الروابط تظهر بالأزرق وتفتح مباشرة.</p>
-    </header>
+def _clean(s: str) -> str:
+    s = re.sub(r"\s+", " ", s or "").strip()
+    return s
 
-    <!-- نموذج السؤال -->
-    <section class="card">
-      <form id="ask" class="row" autocomplete="off">
-        <input id="user_name" placeholder="اسمك (اختياري)">
-        <input id="q" placeholder="اكتب سؤالك هنا…" autofocus>
-        <button type="submit">إرسال</button>
-      </form>
+def _sentences(text: str) -> List[str]:
+    # تقسيم بسيط للجمل العربية/الإنجليزية
+    if not text:
+        return []
+    parts = re.split(r"(?<=[\.\!\؟\?])\s+|[\n\r]+", text)
+    return [p.strip() for p in parts if p.strip()]
 
-      <div id="answer" class="answer"></div>
-      <div id="sources" class="sources"></div>
-    </section>
+def _score_sentence(sent: str, query: str) -> float:
+    # درجة الصلة: عدد كلمات السؤال الموجودة + طول معقول
+    q_tokens = [w for w in re.split(r"[\W_]+", query.lower()) if w]
+    s_tokens = [w for w in re.split(r"[\W_]+", sent.lower()) if w]
+    if not s_tokens:
+        return 0.0
+    overlap = sum(1 for w in q_tokens if w in s_tokens)
+    length_penalty = 1.0 if 6 <= len(s_tokens) <= 40 else 0.6
+    return overlap * length_penalty
 
-    <!-- ملاحظة للوحة المشرف -->
-    <p class="muted" style="text-align:center">لوحة الإشراف: <code>/admin</code> — الإعدادات: <code>/admin/settings</code></p>
-  </div>
+def _extractive_summary(texts: List[str], query: str, max_sents: int = 6) -> List[str]:
+    pool: List[str] = []
+    for t in texts:
+        pool.extend(_sentences(t))
+    scored = sorted(pool, key=lambda s: _score_sentence(s, query), reverse=True)
+    # تخلّص من الجمل المكررة تقريبًا
+    seen, picked = set(), []
+    for s in scored:
+        k = re.sub(r"\W+", "", s.lower())
+        if k in seen:
+            continue
+        seen.add(k)
+        picked.append(s)
+        if len(picked) >= max_sents:
+            break
+    return picked
 
-  <script>
-    // حفظ الاسم محليًا
-    const el = (id)=>document.getElementById(id);
-    try{
-      const saved = localStorage.getItem("BASSAM_NAME") || "";
-      if(saved) el("user_name").value = saved;
-    }catch(e){}
+def _render_sources(results: List[Dict]) -> str:
+    if not results:
+        return "لا توجد مصادر متاحة."
+    lines = []
+    for r in results[:10]:
+        title = _clean(r.get("title") or r.get("site") or "مصدر")
+        url = _clean(r.get("url") or r.get("link") or "")
+        if not url:
+            continue
+        # روابط زرقاء (تعتمد على CSS عندك)
+        lines.append(f"- <a href=\"{url}\" target=\"_blank\" rel=\"noopener\">{title}</a>")
+    return "\n".join(lines) or "لا توجد مصادر متاحة."
 
-    document.getElementById("ask").addEventListener("submit", async (e)=>{
-      e.preventDefault();
-      const q = el("q").value.trim();
-      const user_name = el("user_name").value.trim();
-      try{ localStorage.setItem("BASSAM_NAME", user_name); }catch(e){}
+def _detect_person_query(q: str) -> bool:
+    # تخمين بسيط: إذا كان السؤال يبدأ/يحتوي على "من هو/هي" أو اسمين
+    if re.search(r"\b(من\s+هو|من\s+هي|من\s+هما)\b", q):
+        return True
+    words = q.strip().split()
+    return len(words) <= 5 and any(w.istitle() for w in words)
 
-      if(!q){
-        el("answer").textContent = "اكتب سؤالك أولًا.";
-        el("sources").innerHTML = "";
-        return;
-      }
+def summarize_answer(query: str, results: List[Dict]) -> str:
+    """
+    يُولّد إجابة عربية واضحة + مصادر من نتائج البحث.
+    results المتوقع: قائمة عناصر تحتوي مفاتيح مثل: title, url/link, snippet, source
+    """
+    q = _clean(query)
 
-      el("answer").textContent = "… جاري التحليل والبحث وصياغة إجابة بشرية بالعربية";
-      el("sources").innerHTML = "";
+    # فلتر المحتوى الإباحي (حتى مع VPN)
+    if _is_haram(q):
+        return "لاتنسى أن الله يراك"
 
-      try{
-        const r = await fetch("/search", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ q, user_name })
-        });
-        const j = await r.json();
+    snippets = []
+    for r in results:
+        snip = _clean(r.get("snippet") or r.get("description") or r.get("text") or "")
+        title = _clean(r.get("title") or "")
+        if title and title not in snip:
+            snip = f"{title}. {snip}" if snip else title
+        if snip:
+            snippets.append(snip)
 
-        // نص الإجابة
-        el("answer").textContent = j.answer || "لم أجد إجابة مناسبة الآن.";
+    # إذا لا توجد مقتطفات، صغ إجابة بسيطة بالاعتماد على العناوين فقط
+    if not snippets and results:
+        titles = [_clean(r.get("title") or "") for r in results[:6] if _clean(r.get("title") or "")]
+        summary_points = "\n".join([f"• {t}" for t in titles]) if titles else "لم أجد تفاصيل كافية."
+        sources_html = _render_sources(results)
+        return (
+            f"<p>مرحبًا، أنا <b>بسام</b> لمساعدتك. هذه أبرز النقاط حول سؤالك:</p>"
+            f"<div class='bullets'>{summary_points}</div>"
+            f"<h3>المصادر:</h3><div class='sources'>{sources_html}</div>"
+        )
 
-        // المصادر (روابط زرقاء تفتح مباشرة)
-        const src = j.sources || [];
-        if(src.length){
-          const ul = document.createElement("ul");
-          src.forEach((s)=>{
-            // قد تأتي ككائن {title, link} أو كسلسلة رابط فقط
-            const url = s.link || s.url || s;
-            const title = s.title || url;
-            const li = document.createElement("li");
-            const a = document.createElement("a");
-            a.href = url; a.target="_blank"; a.rel="noopener";
-            a.textContent = title;
-            li.appendChild(a);
-            ul.appendChild(li);
-          });
-          el("sources").innerHTML = "";
-          el("sources").appendChild(ul);
-        }else{
-          el("sources").textContent = "—";
-        }
-      }catch(err){
-        el("answer").textContent = "حدث خطأ أثناء البحث: " + err.message;
-        el("sources").innerHTML = "";
-      }
-    });
-  </script>
-</body>
-</html>
+    picked = _extractive_summary(snippets, q, max_sents=7)
+
+    # تنسيق خاص إذا كان السؤال عن "شخص"
+    person_mode = _detect_person_query(q)
+    header = "بطاقة تعريف" if person_mode else "الخلاصة"
+
+    bullets = "\n".join([f"• {s}" for s in picked]) if picked else "لم أجد ما يكفي لتوليد خلاصة."
+    sources_html = _render_sources(results)
+
+    intro = (
+        "مرحبًا، أنا <b>بسام</b> لمساعدتك—حللت سؤالك ثم بحثت أولًا في Google ثم استكملت بمنصات أخرى "
+        "(DuckDuckGo/الشبكات الاجتماعية) وجمعت لك زبدة النتائج."
+    )
+
+    guidance = (
+        "<div class='note'>إن احتجت تفاصيل إضافية أو زاوية محددة (تاريخ، إحصاءات، خطوات تنفيذ)، "
+        "اخبرني لأعمّق البحث في نفس الموضوع.</div>"
+    )
+
+    html = f"""
+    <div class="answer">
+      <p>{intro}</p>
+      <h3>{header}:</h3>
+      <div class="bullets">
+        {bullets}
+      </div>
+      <h3>المصادر:</h3>
+      <div class="sources">
+        {sources_html}
+      </div>
+      {guidance}
+    </div>
+    """
+    return html
