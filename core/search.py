@@ -1,3 +1,42 @@
+from duckduckgo_search import DDGS
+import requests
+from bs4 import BeautifulSoup
+
+def google_search(query, num_results=5):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        url = f"https://www.google.com/search?q={query}"
+        r = requests.get(url, headers=headers)
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for g in soup.select("div.yuRUbf a")[:num_results]:
+            link = g["href"]
+            results.append(link)
+        return results
+    except Exception as e:
+        print("Google search error:", e)
+        return []
+
+def duckduckgo_search(query, num_results=5):
+    try:
+        with DDGS() as ddgs:
+            results = [r["href"] for r in ddgs.text(query, max_results=num_results)]
+        return results
+    except Exception as e:
+        print("DuckDuckGo search error:", e)
+        return []
+
+def deep_search(query):
+    # أولًا جرّب جوجل
+    google_results = google_search(query)
+    if google_results:
+        print("✅ Using Google search results")
+        return google_results
+
+    # إذا لم يوجد، استخدم ديك دي جو
+    print("🔄 Fallback to DuckDuckGo")
+    ddg_results = duckduckgo_search(query)
+    return ddg_results
 # core/search.py — Bassam الذكي / ALSHOTAIMI v13.6
 
 import httpx, re
