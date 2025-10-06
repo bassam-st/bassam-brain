@@ -4,7 +4,15 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
+
+  <!-- ألوان الشريط في الهاتف -->
+  <meta name="theme-color" content="#0f172a"/>
+
+  <!-- ملف التنسيق -->
   <link rel="stylesheet" href="/static/style.css"/>
+
+  <!-- Manifest الخاص بالتطبيق (PWA) -->
+  <link rel="manifest" href="/static/pwa/manifest.json"/>
 </head>
 
 <body>
@@ -25,8 +33,8 @@
 <section class="card">
   <h3>🔎 بحث بالصورة (كاميرا / استوديو / ملفات)</h3>
   <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
-    <!-- ✅ هنا التعديل المهم -->
-    <input type="file" name="file" accept="image/*" required multiple/>
+    <!-- يقبل من المعرض/الملفات/الكاميرا حسب اختيار المستخدم -->
+    <input type="file" name="file" accept="image/*" required/>
     <button type="submit">ارفع الصورة وابحث</button>
   </form>
 
@@ -64,5 +72,37 @@
 <footer class="footer">
   <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
 </footer>
+
+<!-- سكربت تثبيت التطبيق + تسجيل Service Worker -->
+<script>
+  // زر التثبيت (يظهر عند توفر حدث beforeinstallprompt)
+  let deferredPrompt;
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+
+    const installBtn = document.createElement("button");
+    installBtn.textContent = "📱 تثبيت تطبيق بسام الذكي";
+    installBtn.style = "position:fixed;bottom:16px;right:16px;background:#16a34a;color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.2);z-index:9999;";
+    document.body.appendChild(installBtn);
+
+    installBtn.addEventListener("click", async () => {
+      installBtn.style.display = "none";
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") {
+        console.log("✅ تم تثبيت التطبيق");
+      }
+      deferredPrompt = null;
+    });
+  });
+
+  // تسجيل Service Worker
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/pwa/sw.js")
+      .then(() => console.log("Service Worker مسجل ✅"))
+      .catch(err => console.error("فشل تسجيل Service Worker ❌", err));
+  }
+</script>
 </body>
 </html>
