@@ -4,36 +4,28 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
-
-  <!-- ألوان الشريط في الهاتف -->
-  <meta name="theme-color" content="#0f172a"/>
-
-  <!-- ملف التنسيق -->
+  <meta name="theme-color" content="#7c3aed"/>
+  <link rel="manifest" href="/static/pwa/manifest.json">
   <link rel="stylesheet" href="/static/style.css"/>
-
-  <!-- Manifest الخاص بالتطبيق (PWA) -->
-  <link rel="manifest" href="/static/pwa/manifest.json"/>
 </head>
 
 <body>
 <header class="top">
-  <h1>بسام الذكي – بحث عميق وتلخيص تلقائي</h1>
+  <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
 </header>
 
 <section class="card">
   <form id="searchForm" action="/search" method="post">
     <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-    <label>
-      <input type="checkbox" name="include_prices"/> روابط الأسعار
-    </label>
+    <label><input type="checkbox" name="include_prices" {% if include_prices %}checked{% endif %}/> روابط الأسعار</label>
     <button type="submit">بحث</button>
   </form>
 </section>
 
 <section class="card">
-  <h3>🔎 بحث بالصورة (كاميرا / استوديو / ملفات)</h3>
+  <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / الملفات)</h3>
   <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
-    <!-- يقبل من المعرض/الملفات/الكاميرا حسب اختيار المستخدم -->
+    <!-- accept فقط → سيظهر الكاميرا + الاستوديو + الملفات -->
     <input type="file" name="file" accept="image/*" required/>
     <button type="submit">ارفع الصورة وابحث</button>
   </form>
@@ -41,17 +33,16 @@
   {% if uploaded_image %}
   <div class="preview">
     <p>{{ message }}</p>
-    <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:200px; border-radius:8px;"/>
+    <img src="/static/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:200px;border-radius:8px"/>
     <div class="links">
-      <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
-      <a href="{{ bing_visual }}" target="_blank" class="btn">بحث في Bing Visual Search</a>
+      <a class="btn" target="_blank" href="{{ google_lens }}">Google Lens</a>
+      <a class="btn" target="_blank" href="{{ bing_visual }}">Bing Visual</a>
+      <a class="btn" target="_blank" href="{{ yandex }}">Yandex</a>
     </div>
   </div>
   {% endif %}
 
-  {% if error %}
-  <p style="color:red;">⚠️ {{ error }}</p>
-  {% endif %}
+  {% if error %}<p style="color:#ef4444">⚠️ {{ error }}</p>{% endif %}
 </section>
 
 {% if results %}
@@ -73,36 +64,25 @@
   <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
 </footer>
 
-<!-- سكربت تثبيت التطبيق + تسجيل Service Worker -->
+<!-- زر التثبيت + تسجيل Service Worker -->
 <script>
-  // زر التثبيت (يظهر عند توفر حدث beforeinstallprompt)
-  let deferredPrompt;
-  window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault();
-    deferredPrompt = e;
-
-    const installBtn = document.createElement("button");
-    installBtn.textContent = "📱 تثبيت تطبيق بسام الذكي";
-    installBtn.style = "position:fixed;bottom:16px;right:16px;background:#16a34a;color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.2);z-index:9999;";
-    document.body.appendChild(installBtn);
-
-    installBtn.addEventListener("click", async () => {
-      installBtn.style.display = "none";
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === "accepted") {
-        console.log("✅ تم تثبيت التطبيق");
-      }
-      deferredPrompt = null;
-    });
-  });
-
-  // تسجيل Service Worker
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/static/pwa/sw.js")
-      .then(() => console.log("Service Worker مسجل ✅"))
-      .catch(err => console.error("فشل تسجيل Service Worker ❌", err));
-  }
+let deferredPrompt=null;
+window.addEventListener("beforeinstallprompt",(e)=>{
+  e.preventDefault(); deferredPrompt=e;
+  const btn=document.createElement("button");
+  btn.textContent="📱 تثبيت تطبيق بسام";
+  btn.className="install-btn";
+  document.body.appendChild(btn);
+  btn.onclick=async ()=>{
+    btn.style.display="none";
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt=null;
+  };
+});
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("/static/pwa/sw.js").catch(console.error);
+}
 </script>
 </body>
 </html>
