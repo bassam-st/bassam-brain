@@ -4,85 +4,102 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
+
+  <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
-  <link rel="manifest" href="/static/pwa/manifest.json">
+  <link rel="manifest" href="/static/pwa/manifest.json"/>
+
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 
 <body>
-<header class="top">
-  <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
-</header>
-
-<section class="card">
-  <form id="searchForm" action="/search" method="post">
-    <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-    <label><input type="checkbox" name="include_prices" {% if include_prices %}checked{% endif %}/> روابط الأسعار</label>
-    <button type="submit">بحث</button>
-  </form>
-</section>
-
-<section class="card">
-  <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / الملفات)</h3>
-  <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
-    <!-- accept فقط → سيظهر الكاميرا + الاستوديو + الملفات -->
-    <input type="file" name="file" accept="image/*" required/>
-    <button type="submit">ارفع الصورة وابحث</button>
-  </form>
-
-  {% if uploaded_image %}
-  <div class="preview">
-    <p>{{ message }}</p>
-    <img src="/static/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:200px;border-radius:8px"/>
-    <div class="links">
-      <a class="btn" target="_blank" href="{{ google_lens }}">Google Lens</a>
-      <a class="btn" target="_blank" href="{{ bing_visual }}">Bing Visual</a>
-      <a class="btn" target="_blank" href="{{ yandex }}">Yandex</a>
+  <!-- هيدر احترافي بالشعار -->
+  <section class="hero">
+    <div class="avatar-glow">
+      <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
     </div>
-  </div>
-  {% endif %}
+    <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
+  </section>
 
-  {% if error %}<p style="color:#ef4444">⚠️ {{ error }}</p>{% endif %}
-</section>
+  <!-- بحث نصّي -->
+  <section class="card">
+    <form id="searchForm" action="/search" method="post">
+      <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
+      <label class="inline">
+        <input type="checkbox" name="include_prices"/> روابط الأسعار
+      </label>
+      <button type="submit">بحث</button>
+    </form>
+  </section>
 
-{% if results %}
-<section class="card">
-  <h3>نتائج البحث ({{ engine_used }})</h3>
-  <ul>
-    {% for r in results %}
+  <!-- بحث بالصور -->
+  <section class="card">
+    <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
+    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+      <!-- بدون capture → يفتح الكاميرا والاستوديو والملفات -->
+      <input type="file" name="file" accept="image/*" required/>
+      <button type="submit">ارفع الصورة وابحث</button>
+    </form>
+
+    {% if uploaded_image %}
+    <div class="preview">
+      {% if message %}<p class="ok">{{ message }}</p>{% endif %}
+      <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
+      <div class="links">
+        <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
+        <a href="{{ bing_visual }}" target="_blank" class="btn btn-alt">بحث في Bing Visual Search</a>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <p class="err">⚠️ {{ error }}</p>
+    {% endif %}
+  </section>
+
+  <!-- نتائج -->
+  {% if results %}
+  <section class="card">
+    <h3>نتائج البحث ({{ engine_used }})</h3>
+    <ul class="results">
+      {% for r in results %}
       <li>
-        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a><br/>
-        <small>{{ r.snippet }}</small><br/>
+        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+        <small>{{ r.snippet }}</small>
         <em>{{ r.source }}</em>
       </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
 
-<footer class="footer">
-  <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
-</footer>
+  <footer class="footer">
+    <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
+  </footer>
 
-<!-- زر التثبيت + تسجيل Service Worker -->
-<script>
-let deferredPrompt=null;
-window.addEventListener("beforeinstallprompt",(e)=>{
-  e.preventDefault(); deferredPrompt=e;
-  const btn=document.createElement("button");
-  btn.textContent="📱 تثبيت تطبيق بسام";
-  btn.className="install-btn";
-  document.body.appendChild(btn);
-  btn.onclick=async ()=>{
-    btn.style.display="none";
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    deferredPrompt=null;
-  };
-});
-if("serviceWorker" in navigator){
-  navigator.serviceWorker.register("/static/pwa/sw.js").catch(console.error);
-}
-</script>
+  <!-- زر تثبيت التطبيق + تسجيل Service Worker -->
+  <script>
+    let deferredPrompt;
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      const installBtn = document.createElement("button");
+      installBtn.textContent = "📱 تثبيت تطبيق بسام الذكي";
+      installBtn.className = "install-btn";
+      document.body.appendChild(installBtn);
+      installBtn.addEventListener("click", async () => {
+        installBtn.style.display = "none";
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+      });
+    });
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/static/pwa/sw.js")
+        .then(() => console.log("Service Worker ✅"))
+        .catch(err => console.error("SW error ❌", err));
+    }
+  </script>
 </body>
 </html>
