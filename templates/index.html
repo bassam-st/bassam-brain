@@ -1,82 +1,72 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <meta name="theme-color" content="#0b0f19" />
+  <meta name="theme-color" content="#0b0f19"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    body{font-family:"Cairo",system-ui,Tahoma; background:#0b0f19; color:#eaeef8; margin:0; padding:0;}
+    header{text-align:center;padding:16px 8px;background:#111827;color:#eaeef8}
+    h1{margin:0;font-size:1.4rem}
+    form{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:20px}
+    input[type=text]{padding:8px;border:none;border-radius:6px;width:240px}
+    button{background:#7c3aed;color:white;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:600}
+    button:hover{background:#6d28d9}
+    .chk{display:flex;align-items:center;gap:6px}
+    .card{max-width:800px;margin:0 auto;padding:16px}
+    .sources a{color:#22c55e;text-decoration:none;font-weight:500} /* ✅ اللون الأخضر الجميل */
+    .sources a:hover{text-decoration:underline}
+    footer{text-align:center;padding:16px;font-size:0.9rem;color:#94a3b8}
+  </style>
 </head>
-
 <body>
-  <header class="top">
-    <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
-  </header>
+<header>
+  <h1>بسام الذكي 🔍 — بحث عميق وتلخيص تلقائي</h1>
+</header>
 
-  <section class="card">
-    <form method="post" action="/search" class="row">
-      <input name="q" placeholder="اكتب سؤالك هنا..." required />
-      <label class="chk">
-        <input type="checkbox" name="include_prices" /> روابط الأسعار
-      </label>
-      <button type="submit">بحث</button>
-    </form>
-  </section>
+<section class="card">
+  <form action="/search" method="post">
+    <label class="chk">
+      <input type="checkbox" name="include_prices"/> روابط الأسعار
+    </label>
+    <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
+    <button type="submit">بحث</button>
+  </form>
 
   {% if error %}
-  <div class="card error">⚠️ {{ error }}</div>
+  <p style="color:#f87171">{{ error }}</p>
   {% endif %}
+
+  {% if results %}
+  <h3 style="text-align:center">نتائج البحث ({{ engine_used }})</h3>
+  <div class="sources">
+    {% for r in results %}
+      <p>🔗 <a href="{{ r.link }}" target="_blank">{{ r.title }}</a><br/>
+      <small>{{ r.snippet }}</small></p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <hr/>
+  <h3>بحث بالصورة (كاميرا / ملفات)</h3>
+  <form action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" accept="image/*" required/>
+    <button type="submit">ارفع الصورة وابحث</button>
+  </form>
 
   {% if message %}
-  <div class="card msg">{{ message }}</div>
+  <p style="color:#22c55e">{{ message }}</p>
+  <p>
+    🔍 <a href="{{ google_lens }}" target="_blank">بحث في Google Lens</a><br/>
+    🖼️ <a href="{{ bing_visual }}" target="_blank">بحث في Bing Visual Search</a>
+  </p>
   {% endif %}
+</section>
 
-  <!-- نتائج البحث -->
-  {% if results %}
-  <section class="card">
-    <h3>نتائج البحث ({{ engine_used }})</h3>
-    <ul>
-      {% for r in results %}
-      <li>
-        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
-        <p>{{ r.snippet }}</p>
-        <span class="src">📘 {{ r.source }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% endif %}
-
-  <!-- رفع الصور -->
-  <section class="card">
-    <h3>بحث بالصورة (كاميرا / ملفات)</h3>
-    <form action="/upload" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" accept="image/*" capture="environment" required />
-      <button type="submit">📷 ارفع الصورة وابحث</button>
-    </form>
-  </section>
-
-  {% if uploaded_image %}
-  <section class="card">
-    <h3>نتائج العدسات 🔍</h3>
-    <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:100%;border-radius:12px;" />
-
-    <div class="lens-links">
-      {% if google_lens %}
-      <a href="{{ google_lens }}" class="lens-btn" target="_blank">🔎 بحث Google Lens</a>
-      {% endif %}
-      {% if bing_visual %}
-      <a href="{{ bing_visual }}" class="lens-btn" target="_blank">🖼️ بحث Bing Visual</a>
-      {% endif %}
-      {% if yandex_search %}
-      <a href="{{ yandex_search }}" class="lens-btn" target="_blank">🌐 بحث Yandex Images</a>
-      {% endif %}
-    </div>
-  </section>
-  {% endif %}
-
-  <footer>
-    <p>© Bassam AI 2025 — جميع الحقوق محفوظة</p>
-  </footer>
+<footer>
+  Bassam AI © 2025 • <a href="/admin" style="color:#a855f7">لوحة الإدارة</a>
+</footer>
 </body>
 </html>
