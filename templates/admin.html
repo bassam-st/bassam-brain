@@ -3,64 +3,44 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>لوحة إدارة بسام الذكي</title>
+  <title>لوحة إدارة بسام</title>
   <link rel="stylesheet" href="/static/style.css"/>
-  <style>
-    .login-card{max-width:520px;margin:30px auto}
-    .tbl{width:100%;border-collapse:collapse}
-    .tbl th,.tbl td{border-bottom:1px solid #2a2f3a;padding:8px;font-size:13px}
-    .tbl th{color:#9aa4b2;text-align:right}
-    .right{text-align:right}
-  </style>
 </head>
 <body>
-  <section class="hero">
-    <h1>🔐 تسجيل دخول الإدارة</h1>
-  </section>
-
-  {% if page == "login" %}
-  <section class="card login-card">
-    {% if error %}<p class="err">{{ error }}</p>{% endif %}
-    {% if login %}<p class="ok">أدخل كلمة المرور للدخول.</p>{% endif %}
-    <form action="/admin/login" method="post">
-      <input type="password" name="password" placeholder="كلمة المرور" required/>
-      <button type="submit">دخول</button>
-    </form>
-    <p class="muted">كلمة المرور تُقرأ من متغيّر البيئة <code>ADMIN_PASSWORD</code>.</p>
-  </section>
-  {% endif %}
-
-  {% if page == "dashboard" %}
   <section class="card">
-    <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-      <h3>السجلات ({{ count }})</h3>
-      <div>
-        <a class="btn" href="/admin/export.csv">⬇️ تصدير CSV</a>
-        <a class="btn btn-alt" href="/admin/logout">تسجيل خروج</a>
+    <h2>لوحة الإدارة</h2>
+
+    {% if login %}
+      <form action="/admin/login" method="post" style="max-width:420px">
+        {% if error %}<p class="err">{{ error }}</p>{% endif %}
+        <input type="password" name="password" placeholder="كلمة المرور" required/>
+        <button type="submit">دخول</button>
+      </form>
+      <p class="muted">اضبط المتغيرات في Render: <code>ADMIN_PASSWORD</code> و <code>ADMIN_SECRET</code>.</p>
+    {% else %}
+      <p><a class="btn btn-alt" href="/admin/export.csv">تنزيل CSV</a> • <a class="btn" href="/admin/logout">خروج</a></p>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>ID</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال</th><th>الملف</th><th>المحرك</th><th>IP</th><th>UA</th></tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td>{{ r.id }}</td>
+              <td>{{ r.ts }}</td>
+              <td>{{ r.type }}</td>
+              <td>{{ r.query }}</td>
+              <td>{{ r.file_name }}</td>
+              <td>{{ r.engine_used }}</td>
+              <td>{{ r.ip }}</td>
+              <td class="ua">{{ r.ua }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
-    </div>
-    <div style="overflow:auto">
-      <table class="tbl">
-        <thead>
-          <tr><th>ID</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال</th><th>الملف</th><th>المحرك</th><th>IP</th><th>User Agent</th></tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-          <tr>
-            <td>{{ r.id }}</td>
-            <td>{{ r.ts }}</td>
-            <td>{{ r.type }}</td>
-            <td class="right">{{ r.query }}</td>
-            <td>{{ r.file_name }}</td>
-            <td>{{ r.engine_used }}</td>
-            <td>{{ r.ip }}</td>
-            <td class="right">{{ r.ua }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+    {% endif %}
   </section>
-  {% endif %}
 </body>
 </html>
