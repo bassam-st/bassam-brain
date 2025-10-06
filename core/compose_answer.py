@@ -1,3 +1,4 @@
+from core.utils import ensure_arabic
 # core/compose_answer.py — تركيب إجابات ذكية من نتائج الويب
 from typing import List, Dict
 
