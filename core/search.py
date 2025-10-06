@@ -1,6 +1,6 @@
 # core/search.py — Bassam الذكي / ALSHOTAIMI v13.6
 
-import httpx, re, asyncio
+import httpx, re
 from bs4 import BeautifulSoup
 from readability import Document
 from duckduckgo_search import DDGS
@@ -22,7 +22,7 @@ async def deep_search(query: str):
         return cache[cache_key]
 
     results = []
-    async with DDGS() as ddgs:
+    with DDGS() as ddgs:
         search_results = [r for r in ddgs.text(query, max_results=5)]
         for r in search_results:
             link = r.get("href") or r.get("url")
