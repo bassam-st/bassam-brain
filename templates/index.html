@@ -1,42 +1,97 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/static/pwa/manifest.json">
+  <meta name="theme-color" content="#0b0f19"/>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<header class="top">
+  <h1>بسام الذكي 🔎 — بحث عميق وتلخيص تلقائي</h1>
+  <div class="actions">
+    <button id="installBtn" hidden>تثبيت التطبيق</button>
+    <button id="themeBtn" title="الوضع الليلي/النهاري">☀️/🌙</button>
+  </div>
+</header>
+
+<section class="card">
+  <form id="searchForm" class="row">
+    <label class="chk"><input type="checkbox" id="price_links" name="price_links"/> روابط الأسعار</label>
+    <input id="q" name="q" placeholder="اكتب سؤالك..." required/>
+    <button id="goBtn" type="submit">بحث</button>
+  </form>
+</section>
+
+<main id="answer" class="card answer"></main>
+
+<footer class="foot">© Bassam AI — 2025</footer>
+
 <script>
 document.addEventListener("DOMContentLoaded", () => {
+  // Theme toggle
+  const themeBtn = document.getElementById("themeBtn");
+  themeBtn.addEventListener("click", () => {
+    const dark = document.body.classList.toggle("dark");
+    localStorage.setItem("theme", dark ? "dark" : "light");
+  });
+  if(localStorage.getItem("theme") === "dark") document.body.classList.add("dark");
+
+  // PWA install prompt
+  const installBtn = document.getElementById("installBtn");
+  let deferredPrompt;
+  window.addEventListener("beforeinstallprompt", e => {
+    e.preventDefault();
+    deferredPrompt = e;
+    installBtn.hidden = false;
+  });
+  installBtn.addEventListener("click", async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const choice = await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    installBtn.hidden = true;
+  });
+
+  // البحث
   const form   = document.getElementById("searchForm");
   const input  = document.getElementById("q");
-  const price  = document.getElementById("price_links"); // صندوق "روابط الأسعار" إن وجد
-  const btn    = document.getElementById("goBtn");       // زر "بحث"
-  const answer = document.getElementById("answer");      // مكان عرض النتيجة
+  const price  = document.getElementById("price_links");
+  const btn    = document.getElementById("goBtn");
+  const answer = document.getElementById("answer");
 
   async function doSearch(e){
-    e.preventDefault();               // منع إعادة تحميل الصفحة
+    e.preventDefault();
     const q = (input.value || "").trim();
     if (!q){ input.focus(); return; }
 
-    // حالة تحميل بسيطة
     btn.disabled = true;
     const old = btn.innerText;
     btn.innerText = "يبحث…";
-    answer.innerHTML = `<div class="loading">🔎 جاري البحث والتحليل…</div>`;
+    answer.innerHTML = `<div class="loading">🔎 جاري البحث والتحليل...</div>`;
 
-    try{
+    try {
       const fd = new FormData();
       fd.append("q", q);
       if (price && price.checked) fd.append("price_links", "on");
 
       const res = await fetch("/search", { method: "POST", body: fd });
-      if (!res.ok){
+      if (!res.ok) {
         const txt = await res.text();
         throw new Error("HTTP " + res.status + ": " + txt);
       }
-      const html = await res.text();     // الـ backend يُرجع HTML جاهز
+      const html = await res.text();
       answer.innerHTML = html;
-    }catch(err){
+    } catch (err) {
       console.error(err);
-      answer.innerHTML = `
-        <div class="error">
-          حدث خطأ أثناء البحث. جرّب مرة أخرى.
-          <pre style="white-space:pre-wrap">${String(err)}</pre>
-        </div>`;
-    }finally{
+      answer.innerHTML = `<div class="error">⚠️ حدث خطأ أثناء البحث. حاول مرة أخرى.<br><pre>${String(err)}</pre></div>`;
+    } finally {
       btn.disabled = false;
       btn.innerText = old;
     }
@@ -45,3 +100,6 @@ document.addEventListener("DOMContentLoaded", () => {
   form.addEventListener("submit", doSearch);
 });
 </script>
+
+</body>
+</html>
