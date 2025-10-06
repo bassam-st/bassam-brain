@@ -1,14 +1,11 @@
 fastapi
 uvicorn
-jinja2
 httpx
 beautifulsoup4
 readability-lxml
 duckduckgo-search
 diskcache
 sympy
+jinja2
 python-multipart
-pydantic
-aiofiles
-deep-translator
-langdetect
+lxml
