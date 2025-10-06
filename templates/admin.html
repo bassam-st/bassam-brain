@@ -3,18 +3,52 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>لوحة الإشراف – مساعدك بسام الذكي</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <title>لوحة الإدارة</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="card">
-    <h2>لوحة الإشراف</h2>
-    <form method="post" action="/admin/login">
-      <label>كلمة المرور:</label>
-      <input type="password" name="password" required>
-      <button type="submit">دخول</button>
-    </form>
-    <p class="muted">⚠️ الوصول مخصص للمشرف فقط</p>
-  </div>
+  <main class="container">
+    <h1>لوحة إدارة بسام</h1>
+
+    {% if not ok %}
+      <form method="post" action="/admin/login" class="card">
+        <input class="input" type="password" name="password" placeholder="أدخل كلمة المرور" required>
+        <button class="btn">دخول</button>
+      </form>
+    {% else %}
+      <form method="post" action="/admin/clear" class="card">
+        <button class="btn danger" onclick="return confirm('مسح السجل بالكامل؟')">مسح السجل</button>
+      </form>
+
+      <section class="card">
+        <h2>آخر السجلات</h2>
+        <table class="table">
+          <thead>
+            <tr><th>الوقت</th><th>النوع</th><th>IP</th><th>تفاصيل</th></tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td>{{ row.ts }}</td>
+                <td>{{ row.type }}</td>
+                <td>{{ row.ip }}</td>
+                <td>
+                  {% if row.type == 'text_search' %}
+                    سؤال: <b>{{ row.q }}</b> — نتائج: {{ row.results }}
+                  {% elif row.type == 'image_search' %}
+                    صورة: <code>{{ row.file }}</code>
+                  {% else %}
+                    <pre>{{ row | tojson(indent=0) }}</pre>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endif %}
+
+    <p><a href="/" class="btn">الواجهة</a></p>
+  </main>
 </body>
 </html>
