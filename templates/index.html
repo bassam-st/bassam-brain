@@ -7,8 +7,8 @@
 
   <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
 
@@ -16,7 +16,7 @@
 </head>
 
 <body>
-  <!-- هيدر بالشعار -->
+  <!-- هيدر -->
   <section class="hero">
     <div class="avatar-glow">
       <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
@@ -24,19 +24,26 @@
     <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
   </section>
 
-  <!-- بحث نصّي -->
+  <!-- بحث نصي -->
   <section class="card">
-    <form id="searchForm" action="/search" method="post">
+    <form action="/search" method="post">
       <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-      <label class="inline"><input type="checkbox" name="include_prices"/> روابط الأسعار</label>
       <button type="submit">بحث</button>
     </form>
   </section>
 
+  <!-- ملخص سريع -->
+  {% if summary %}
+  <section class="card">
+    <h3>🧠 ملخّص سريع</h3>
+    <p>{{ summary }}</p>
+  </section>
+  {% endif %}
+
   <!-- بحث بالصور -->
   <section class="card">
     <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+    <form action="/upload" method="post" enctype="multipart/form-data">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -94,7 +101,6 @@
     });
 
     if ("serviceWorker" in navigator) {
-      // نخدم sw من /sw.js (على الجذر) حتى تلتقط كل الطلبات
       navigator.serviceWorker.register("/sw.js")
         .then(() => console.log("SW registered ✅"))
         .catch(err => console.error("SW error ❌", err));
