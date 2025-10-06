@@ -8,6 +8,10 @@
   <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
   <link rel="manifest" href="/static/pwa/manifest.json"/>
+  <!-- أيقونات (اختياري لكن مفيد خصوصًا على iOS) -->
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
 
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
@@ -46,8 +50,8 @@
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
       <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
       <div class="links">
-        <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
-        <a href="{{ bing_visual }}" target="_blank" class="btn btn-alt">بحث في Bing Visual Search</a>
+        <a href="{{ google_lens }}" target="_blank" rel="noopener noreferrer" class="btn">بحث في Google Lens</a>
+        <a href="{{ bing_visual }}" target="_blank" rel="noopener noreferrer" class="btn btn-alt">بحث في Bing Visual Search</a>
       </div>
     </div>
     {% endif %}
@@ -64,7 +68,7 @@
     <ul class="results">
       {% for r in results %}
       <li>
-        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+        <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">{{ r.title }}</a>
         <small>{{ r.snippet }}</small>
         <em>{{ r.source }}</em>
       </li>
@@ -80,13 +84,19 @@
   <!-- زر تثبيت التطبيق + تسجيل Service Worker -->
   <script>
     let deferredPrompt;
+
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       deferredPrompt = e;
+
+      // لا تُكرر الزر إذا أُضيف سابقًا
+      if (document.querySelector(".install-btn")) return;
+
       const installBtn = document.createElement("button");
       installBtn.textContent = "📱 تثبيت تطبيق بسام الذكي";
       installBtn.className = "install-btn";
       document.body.appendChild(installBtn);
+
       installBtn.addEventListener("click", async () => {
         installBtn.style.display = "none";
         deferredPrompt.prompt();
@@ -95,11 +105,20 @@
       });
     });
 
+    // إخفاء زر التثبيت بعد نجاح التنصيب
+    window.addEventListener("appinstalled", () => {
+      const btn = document.querySelector(".install-btn");
+      if (btn) btn.remove();
+      console.log("✅ تم تثبيت التطبيق");
+    });
+
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/static/pwa/sw.js")
         .then(() => console.log("Service Worker ✅"))
         .catch(err => console.error("SW error ❌", err));
     }
   </script>
+
+  <noscript>الرجاء تفعيل JavaScript لاستخدام التطبيق بكامل الميزات.</noscript>
 </body>
 </html>
