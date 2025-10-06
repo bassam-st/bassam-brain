@@ -1,74 +1,114 @@
-# brain/omni_brain.py — Bassam الذكي / ALSHOTAIMI v13.6
-# مسؤول عن توليد إجابة عربية طبيعية اعتمادًا على نتائج البحث المنظَّفة.
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>مساعدك بسام الذكي / ALSHOTAIMI</title>
 
-from typing import List, Dict
-import re
+  <!-- PWA (اختياري لو أضفناها لاحقًا) -->
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="theme-color" content="#0b0f19" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
 
-def _clean_text(s: str) -> str:
-    if not s:
-        return ""
-    # إزالة المسافات الزائدة
-    s = re.sub(r"\s+", " ", s).strip()
-    # تقصير النصوص الطويلة جدًا
-    return s[:700]
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body{font-family:system-ui,Tahoma; background:#0b0f19; color:#eaeef8; margin:0; padding:16px;}
+    .container{max-width:980px; margin:0 auto;}
+    .card{background:#101625; border:1px solid #182033; border-radius:16px; padding:16px; margin:12px 0;}
+    .row{display:flex; gap:8px; flex-wrap:wrap;}
+    input,button{border-radius:12px; border:1px solid #223; background:#0e1422; color:#eaeef8;}
+    input{padding:10px 12px; flex:1; min-width:200px;}
+    button{background:#7b6cff; border:0; padding:10px 16px; cursor:pointer;}
+    .muted{color:#9bb1d0; font-size:13px}
+    .answer{white-space:pre-wrap; line-height:1.8; margin-top:10px}
+    .sources a{color:#7fb2ff; text-decoration:underline; word-break:break-all;}
+    .badge{display:inline-block; background:#0d2037; border:1px solid #243555; padding:6px 10px; border-radius:10px; font-size:13px}
+    h1{margin:0 0 6px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="card">
+      <h1>مساعدك <b>بسام</b> الذكي / <span class="badge">ALSHOTAIMI</span></h1>
+      <p class="muted">مرحبًا! أنا بسام لمساعدتك 👋 — اكتب سؤالك بالعربية وسأبحث وألخّص من مصادر موثوقة. الروابط تظهر بالأزرق وتفتح مباشرة.</p>
+    </header>
 
-def _pick_sentences(text: str, limit_sentences: int = 3) -> str:
-    """
-    يلتقط 2-3 جُمل الأكثر إفادة من الملخص المنظّف.
-    """
-    if not text:
-        return ""
-    # تقسيم على علامات الوقف العربية والإنجليزية
-    parts = re.split(r"(?<=[\.!\?؟])\s+", text)
-    # الترتيب بسيط: أول الجمل بعد التنظيف تكفي كبداية جيدة
-    chosen = []
-    for p in parts:
-        p = p.strip()
-        if 8 <= len(p) <= 280:
-            chosen.append(p)
-        if len(chosen) >= limit_sentences:
-            break
-    if not chosen:
-        return text[:280]
-    return " ".join(chosen)
+    <!-- نموذج السؤال -->
+    <section class="card">
+      <form id="ask" class="row" autocomplete="off">
+        <input id="user_name" placeholder="اسمك (اختياري)">
+        <input id="q" placeholder="اكتب سؤالك هنا…" autofocus>
+        <button type="submit">إرسال</button>
+      </form>
 
-def summarize_answer(results: List[Dict]) -> str:
-    """
-    يستقبل قائمة نتائج بالشكل:
-    [
-      {"title": "...", "link": "https://...", "summary": "نص مستخرج من الصفحة"},
-      ...
-    ]
-    ويعيد إجابة عربية طبيعية + نقاط مختصرة + تنبيه بالمصادر.
-    """
-    if not results:
-        return "لم أعثر على معلومات كافية حاليًا. جرّب توضيح سؤالك أو اسأل بصيغة أخرى."
+      <div id="answer" class="answer"></div>
+      <div id="sources" class="sources"></div>
+    </section>
 
-    # 1) مقدّمة طبيعية قصيرة
-    intro = "إليك خلاصة سريعة مبنية على أكثر الصفحات وثوقًا ووضوحًا مما عثرت عليه:"
+    <!-- ملاحظة للوحة المشرف -->
+    <p class="muted" style="text-align:center">لوحة الإشراف: <code>/admin</code> — الإعدادات: <code>/admin/settings</code></p>
+  </div>
 
-    # 2) نبني نقاط موجزة من أول 3–5 نتائج
-    bullets = []
-    for r in results[:5]:
-        title = (r.get("title") or "").strip()
-        summary = _clean_text(r.get("summary") or "")
-        picked = _pick_sentences(summary, limit_sentences=2)
-        if not picked and summary:
-            picked = summary[:200]
-        if title and picked:
-            bullets.append(f"• {title}: {picked}")
-        elif picked:
-            bullets.append(f"• {picked}")
+  <script>
+    // حفظ الاسم محليًا
+    const el = (id)=>document.getElementById(id);
+    try{
+      const saved = localStorage.getItem("BASSAM_NAME") || "";
+      if(saved) el("user_name").value = saved;
+    }catch(e){}
 
-    if not bullets:
-        # لو ما قدرنا نركّب نقاط مفيدة، نرجع ملخصًا عامًا من أول نتيجة
-        first = results[0]
-        return _pick_sentences(_clean_text(first.get("summary") or ""), limit_sentences=4)
+    document.getElementById("ask").addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      const q = el("q").value.trim();
+      const user_name = el("user_name").value.trim();
+      try{ localStorage.setItem("BASSAM_NAME", user_name); }catch(e){}
 
-    body = "\n".join(bullets)
+      if(!q){
+        el("answer").textContent = "اكتب سؤالك أولًا.";
+        el("sources").innerHTML = "";
+        return;
+      }
 
-    # 3) خاتمة لطيفة + تلميح للمصادر
-    outro = "للتوسّع يمكنك فتح الروابط في قسم “المصادر” أسفل الإجابة."
+      el("answer").textContent = "… جاري التحليل والبحث وصياغة إجابة بشرية بالعربية";
+      el("sources").innerHTML = "";
 
-    answer = f"{intro}\n\n{body}\n\n{outro}"
-    return answer
+      try{
+        const r = await fetch("/search", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ q, user_name })
+        });
+        const j = await r.json();
+
+        // نص الإجابة
+        el("answer").textContent = j.answer || "لم أجد إجابة مناسبة الآن.";
+
+        // المصادر (روابط زرقاء تفتح مباشرة)
+        const src = j.sources || [];
+        if(src.length){
+          const ul = document.createElement("ul");
+          src.forEach((s)=>{
+            // قد تأتي ككائن {title, link} أو كسلسلة رابط فقط
+            const url = s.link || s.url || s;
+            const title = s.title || url;
+            const li = document.createElement("li");
+            const a = document.createElement("a");
+            a.href = url; a.target="_blank"; a.rel="noopener";
+            a.textContent = title;
+            li.appendChild(a);
+            ul.appendChild(li);
+          });
+          el("sources").innerHTML = "";
+          el("sources").appendChild(ul);
+        }else{
+          el("sources").textContent = "—";
+        }
+      }catch(err){
+        el("answer").textContent = "حدث خطأ أثناء البحث: " + err.message;
+        el("sources").innerHTML = "";
+      }
+    });
+  </script>
+</body>
+</html>
