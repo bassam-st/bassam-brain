@@ -2,53 +2,64 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>لوحة الإدارة</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>لوحة إدارة — بسام الذكي</title>
+  <link rel="stylesheet" href="/static/admin.css"/>
 </head>
 <body>
-  <main class="container">
-    <h1>لوحة إدارة بسام</h1>
+  {% if page == "login" %}
+  <div class="wrap">
+    <h1>🔐 تسجيل دخول الإدارة</h1>
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <form action="/admin/login" method="post" class="card">
+      <label>كلمة المرور</label>
+      <input type="password" name="password" required/>
+      <button type="submit">دخول</button>
+    </form>
+    <p class="muted">اضبط المتغير ADMIN_PASSWORD في الاستضافة.</p>
+  </div>
+  {% endif %}
 
-    {% if not ok %}
-      <form method="post" action="/admin/login" class="card">
-        <input class="input" type="password" name="password" placeholder="أدخل كلمة المرور" required>
-        <button class="btn">دخول</button>
-      </form>
-    {% else %}
-      <form method="post" action="/admin/clear" class="card">
-        <button class="btn danger" onclick="return confirm('مسح السجل بالكامل؟')">مسح السجل</button>
-      </form>
+  {% if page == "dashboard" %}
+  <header class="topbar">
+    <h1>لوحة إدارة — بسام الذكي</h1>
+    <div class="actions">
+      <a class="btn" href="/admin/export.csv">⬇️ تنزيل CSV</a>
+      <a class="btn alt" href="/admin/logout">تسجيل خروج</a>
+    </div>
+  </header>
 
-      <section class="card">
-        <h2>آخر السجلات</h2>
-        <table class="table">
-          <thead>
-            <tr><th>الوقت</th><th>النوع</th><th>IP</th><th>تفاصيل</th></tr>
-          </thead>
-          <tbody>
-            {% for row in rows %}
-              <tr>
-                <td>{{ row.ts }}</td>
-                <td>{{ row.type }}</td>
-                <td>{{ row.ip }}</td>
-                <td>
-                  {% if row.type == 'text_search' %}
-                    سؤال: <b>{{ row.q }}</b> — نتائج: {{ row.results }}
-                  {% elif row.type == 'image_search' %}
-                    صورة: <code>{{ row.file }}</code>
-                  {% else %}
-                    <pre>{{ row | tojson(indent=0) }}</pre>
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </section>
-    {% endif %}
-
-    <p><a href="/" class="btn">الواجهة</a></p>
-  </main>
+  <div class="wrap">
+    <div class="summary">إجمالي السجلات المعروضة: <strong>{{ count }}</strong></div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال/الصورة</th><th>المحرك</th><th>IP</th><th>المتصفح</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td class="mono">{{ r.ts }}</td>
+            <td>{% if r.type=='search' %}بحث نصي{% else %}صورة{% endif %}</td>
+            <td>
+              {% if r.type=='search' %}
+                {{ r.query }}
+              {% else %}
+                <a href="/uploads/{{ r.file_name }}" target="_blank">{{ r.file_name }}</a>
+              {% endif %}
+            </td>
+            <td>{{ r.engine_used or '-' }}</td>
+            <td class="mono">{{ r.ip }}</td>
+            <td class="ua">{{ r.ua }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
 </body>
 </html>
