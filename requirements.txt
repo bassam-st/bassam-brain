@@ -10,3 +10,5 @@ sympy
 python-multipart
 pydantic
 aiofiles
+deep-translator
+langdetect
