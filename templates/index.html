@@ -4,69 +4,65 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
-  <meta name="theme-color" content="#0b0f19"/>
   <link rel="stylesheet" href="/static/style.css"/>
-  <style>
-    body{font-family:"Cairo",system-ui,Tahoma; background:#0b0f19; color:#eaeef8; margin:0; padding:0;}
-    header{text-align:center;padding:16px 8px;background:#111827;color:#eaeef8}
-    h1{margin:0;font-size:1.4rem}
-    form{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:20px}
-    input[type=text]{padding:8px;border:none;border-radius:6px;width:240px}
-    button{background:#7c3aed;color:white;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:600}
-    button:hover{background:#6d28d9}
-    .chk{display:flex;align-items:center;gap:6px}
-    .card{max-width:800px;margin:0 auto;padding:16px}
-    .sources a{color:#22c55e;text-decoration:none;font-weight:500} /* ✅ اللون الأخضر الجميل */
-    .sources a:hover{text-decoration:underline}
-    footer{text-align:center;padding:16px;font-size:0.9rem;color:#94a3b8}
-  </style>
 </head>
+
 <body>
-<header>
-  <h1>بسام الذكي 🔍 — بحث عميق وتلخيص تلقائي</h1>
+<header class="top">
+  <h1>بسام الذكي – بحث عميق وتلخيص تلقائي</h1>
 </header>
 
 <section class="card">
-  <form action="/search" method="post">
-    <label class="chk">
+  <form id="searchForm" action="/search" method="post">
+    <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
+    <label>
       <input type="checkbox" name="include_prices"/> روابط الأسعار
     </label>
-    <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
     <button type="submit">بحث</button>
   </form>
+</section>
 
-  {% if error %}
-  <p style="color:#f87171">{{ error }}</p>
-  {% endif %}
-
-  {% if results %}
-  <h3 style="text-align:center">نتائج البحث ({{ engine_used }})</h3>
-  <div class="sources">
-    {% for r in results %}
-      <p>🔗 <a href="{{ r.link }}" target="_blank">{{ r.title }}</a><br/>
-      <small>{{ r.snippet }}</small></p>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  <hr/>
-  <h3>بحث بالصورة (كاميرا / ملفات)</h3>
-  <form action="/upload" method="post" enctype="multipart/form-data">
-    <input type="file" name="file" accept="image/*" required/>
+<section class="card">
+  <h3>🔎 بحث بالصورة (كاميرا / استوديو / ملفات)</h3>
+  <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+    <!-- ✅ هنا التعديل المهم -->
+    <input type="file" name="file" accept="image/*" required multiple/>
     <button type="submit">ارفع الصورة وابحث</button>
   </form>
 
-  {% if message %}
-  <p style="color:#22c55e">{{ message }}</p>
-  <p>
-    🔍 <a href="{{ google_lens }}" target="_blank">بحث في Google Lens</a><br/>
-    🖼️ <a href="{{ bing_visual }}" target="_blank">بحث في Bing Visual Search</a>
-  </p>
+  {% if uploaded_image %}
+  <div class="preview">
+    <p>{{ message }}</p>
+    <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" style="max-width:200px; border-radius:8px;"/>
+    <div class="links">
+      <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
+      <a href="{{ bing_visual }}" target="_blank" class="btn">بحث في Bing Visual Search</a>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <p style="color:red;">⚠️ {{ error }}</p>
   {% endif %}
 </section>
 
-<footer>
-  Bassam AI © 2025 • <a href="/admin" style="color:#a855f7">لوحة الإدارة</a>
+{% if results %}
+<section class="card">
+  <h3>نتائج البحث ({{ engine_used }})</h3>
+  <ul>
+    {% for r in results %}
+      <li>
+        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a><br/>
+        <small>{{ r.snippet }}</small><br/>
+        <em>{{ r.source }}</em>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<footer class="footer">
+  <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
 </footer>
 </body>
 </html>
