@@ -3,63 +3,64 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>لوحة إدارة — بسام الذكي</title>
-  <link rel="stylesheet" href="/static/admin.css"/>
+  <title>لوحة إدارة بسام الذكي</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    .login-card{max-width:520px;margin:30px auto}
+    .tbl{width:100%;border-collapse:collapse}
+    .tbl th,.tbl td{border-bottom:1px solid #2a2f3a;padding:8px;font-size:13px}
+    .tbl th{color:#9aa4b2;text-align:right}
+    .right{text-align:right}
+  </style>
 </head>
 <body>
-  {% if page == "login" %}
-  <div class="wrap">
+  <section class="hero">
     <h1>🔐 تسجيل دخول الإدارة</h1>
+  </section>
+
+  {% if page == "login" %}
+  <section class="card login-card">
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
-    <form action="/admin/login" method="post" class="card">
-      <label>كلمة المرور</label>
-      <input type="password" name="password" required/>
+    {% if login %}<p class="ok">أدخل كلمة المرور للدخول.</p>{% endif %}
+    <form action="/admin/login" method="post">
+      <input type="password" name="password" placeholder="كلمة المرور" required/>
       <button type="submit">دخول</button>
     </form>
-    <p class="muted">اضبط المتغير ADMIN_PASSWORD في الاستضافة.</p>
-  </div>
+    <p class="muted">كلمة المرور تُقرأ من متغيّر البيئة <code>ADMIN_PASSWORD</code>.</p>
+  </section>
   {% endif %}
 
   {% if page == "dashboard" %}
-  <header class="topbar">
-    <h1>لوحة إدارة — بسام الذكي</h1>
-    <div class="actions">
-      <a class="btn" href="/admin/export.csv">⬇️ تنزيل CSV</a>
-      <a class="btn alt" href="/admin/logout">تسجيل خروج</a>
+  <section class="card">
+    <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <h3>السجلات ({{ count }})</h3>
+      <div>
+        <a class="btn" href="/admin/export.csv">⬇️ تصدير CSV</a>
+        <a class="btn btn-alt" href="/admin/logout">تسجيل خروج</a>
+      </div>
     </div>
-  </header>
-
-  <div class="wrap">
-    <div class="summary">إجمالي السجلات المعروضة: <strong>{{ count }}</strong></div>
-    <div class="tablewrap">
-      <table>
+    <div style="overflow:auto">
+      <table class="tbl">
         <thead>
-          <tr>
-            <th>#</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال/الصورة</th><th>المحرك</th><th>IP</th><th>المتصفح</th>
-          </tr>
+          <tr><th>ID</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال</th><th>الملف</th><th>المحرك</th><th>IP</th><th>User Agent</th></tr>
         </thead>
         <tbody>
           {% for r in rows %}
           <tr>
             <td>{{ r.id }}</td>
-            <td class="mono">{{ r.ts }}</td>
-            <td>{% if r.type=='search' %}بحث نصي{% else %}صورة{% endif %}</td>
-            <td>
-              {% if r.type=='search' %}
-                {{ r.query }}
-              {% else %}
-                <a href="/uploads/{{ r.file_name }}" target="_blank">{{ r.file_name }}</a>
-              {% endif %}
-            </td>
-            <td>{{ r.engine_used or '-' }}</td>
-            <td class="mono">{{ r.ip }}</td>
-            <td class="ua">{{ r.ua }}</td>
+            <td>{{ r.ts }}</td>
+            <td>{{ r.type }}</td>
+            <td class="right">{{ r.query }}</td>
+            <td>{{ r.file_name }}</td>
+            <td>{{ r.engine_used }}</td>
+            <td>{{ r.ip }}</td>
+            <td class="right">{{ r.ua }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-  </div>
+  </section>
   {% endif %}
 </body>
 </html>
