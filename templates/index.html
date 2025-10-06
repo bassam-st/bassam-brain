@@ -8,39 +8,28 @@
   <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
   <link rel="manifest" href="/static/pwa/manifest.json"/>
-  <!-- أيقونات (اختياري لكن مفيد خصوصًا على iOS) -->
-  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
-  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
 
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
-
 <body>
-  <!-- هيدر احترافي بالشعار -->
-  <section class="hero">
-    <div class="avatar-glow">
-      <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
-    </div>
+  <header class="hero">
+    <img src="/static/icons/icon-192.png" alt="بسام الذكي" class="logo"/>
     <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
-  </section>
+  </header>
 
   <!-- بحث نصّي -->
   <section class="card">
-    <form id="searchForm" action="/search" method="post">
+    <form action="/search" method="post" class="row">
       <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-      <label class="inline">
-        <input type="checkbox" name="include_prices"/> روابط الأسعار
-      </label>
+      <label class="inline"><input type="checkbox" name="include_prices"/> روابط الأسعار</label>
       <button type="submit">بحث</button>
     </form>
   </section>
 
-  <!-- بحث بالصور -->
+  <!-- بحث بالصورة -->
   <section class="card">
     <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
-      <!-- بدون capture → يفتح الكاميرا والاستوديو والملفات -->
+    <form action="/upload" method="post" enctype="multipart/form-data" class="row">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -50,28 +39,25 @@
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
       <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
       <div class="links">
-        <a href="{{ google_lens }}" target="_blank" rel="noopener noreferrer" class="btn">بحث في Google Lens</a>
-        <a href="{{ bing_visual }}" target="_blank" rel="noopener noreferrer" class="btn btn-alt">بحث في Bing Visual Search</a>
+        <a class="btn" href="{{ google_lens }}" target="_blank">بحث في Google Lens</a>
+        <a class="btn alt" href="{{ bing_visual }}" target="_blank">بحث في Bing Visual</a>
       </div>
     </div>
     {% endif %}
 
-    {% if error %}
-    <p class="err">⚠️ {{ error }}</p>
-    {% endif %}
+    {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- نتائج -->
   {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
     <ul class="results">
       {% for r in results %}
-      <li>
-        <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">{{ r.title }}</a>
-        <small>{{ r.snippet }}</small>
-        <em>{{ r.source }}</em>
-      </li>
+        <li>
+          <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+          <small>{{ r.snippet }}</small>
+          <em>{{ r.source }}</em>
+        </li>
       {% endfor %}
     </ul>
   </section>
@@ -81,44 +67,31 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- زر تثبيت التطبيق + تسجيل Service Worker -->
+  <!-- زر تثبيت التطبيق + تسجيل SW -->
   <script>
+    // زر التثبيت المخصّص
     let deferredPrompt;
-
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       deferredPrompt = e;
-
-      // لا تُكرر الزر إذا أُضيف سابقًا
-      if (document.querySelector(".install-btn")) return;
-
-      const installBtn = document.createElement("button");
-      installBtn.textContent = "📱 تثبيت تطبيق بسام الذكي";
-      installBtn.className = "install-btn";
-      document.body.appendChild(installBtn);
-
-      installBtn.addEventListener("click", async () => {
-        installBtn.style.display = "none";
+      const btn = document.createElement("button");
+      btn.className = "install-btn";
+      btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
+      document.body.appendChild(btn);
+      btn.addEventListener("click", async () => {
+        btn.style.display = "none";
         deferredPrompt.prompt();
         await deferredPrompt.userChoice;
         deferredPrompt = null;
       });
     });
 
-    // إخفاء زر التثبيت بعد نجاح التنصيب
-    window.addEventListener("appinstalled", () => {
-      const btn = document.querySelector(".install-btn");
-      if (btn) btn.remove();
-      console.log("✅ تم تثبيت التطبيق");
-    });
-
+    // تسجيل Service Worker من الجذر
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/static/pwa/sw.js")
-        .then(() => console.log("Service Worker ✅"))
+      navigator.serviceWorker.register("/sw.js")
+        .then(() => console.log("SW ready at /sw.js ✅"))
         .catch(err => console.error("SW error ❌", err));
     }
   </script>
-
-  <noscript>الرجاء تفعيل JavaScript لاستخدام التطبيق بكامل الميزات.</noscript>
 </body>
 </html>
