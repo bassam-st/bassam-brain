@@ -3,104 +3,73 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
+  <title>لوحة التحكم – مساعدك بسام الذكي</title>
   <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    table{width:100%; border-collapse:collapse; margin-top:15px}
+    th,td{border:1px solid #334; padding:6px 10px; text-align:right; font-size:13px}
+    th{background:#151d2b}
+    tr:nth-child(even){background:#0e1422}
+    h2{margin-top:30px}
+    .back{background:#7b6cff; color:#fff; border:0; padding:8px 14px; border-radius:8px; text-decoration:none}
+  </style>
 </head>
 <body>
-  <div class="container">
-    <h1>بسام الذكي 🔎 — بحث عميق وتلخيص تلقائي</h1>
+  <div class="card">
+    <h1>لوحة تحكم مساعدك <b>بسام الذكي / ALSHOTAIMI</b></h1>
+    <a href="/admin" class="back">تسجيل خروج</a>
 
-    <form method="post" action="/search" class="search-box">
-      <div class="switches">
-        <label class="switch">
-          <input type="checkbox" name="enable_social"/>
-          <span>تفعيل البحث الاجتماعي (أسماء/حسابات)</span>
-        </label>
-        <label class="switch">
-          <input type="checkbox" name="enable_comments"/>
-          <span>روابط نقاشات/تعليقات (Twitter/Reddit/YouTube...)</span>
-        </label>
-        <label class="switch">
-          <input type="checkbox" name="enable_math"/>
-          <span>وضع الرياضيات (شرح خطوة بخطوة)</span>
-        </label>
-      </div>
+    <h2>📋 السجلات</h2>
 
-      <div class="row">
-        <input class="q" name="q" placeholder="اكتب سؤالك هنا… أو مثال: solve: x^2-5*x+6=0" value="{{ q or '' }}" required/>
-        <button type="submit">إرسال</button>
-      </div>
+    <h3>🗨️ المحادثات</h3>
+    <table>
+      <tr><th>الوقت</th><th>المستخدم</th><th>السؤال</th><th>الإجابة</th></tr>
+      {% for c in conversations %}
+        {% if not c.startswith("timestamp") %}
+        {% set parts = c.strip().split(",") %}
+        <tr>
+          <td>{{ parts[0] }}</td>
+          <td>{{ parts[2] }}</td>
+          <td>{{ parts[3] }}</td>
+          <td>{{ parts[4] }}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+    </table>
 
-      <input type="hidden" name="page" value="{{ page or 1 }}">
+    <h3>🚫 المحظورات</h3>
+    <table>
+      <tr><th>الوقت</th><th>المستخدم</th><th>السؤال</th><th>السبب</th></tr>
+      {% for b in blocks %}
+        {% if not b.startswith("timestamp") %}
+        {% set parts = b.strip().split(",") %}
+        <tr>
+          <td>{{ parts[0] }}</td>
+          <td>{{ parts[2] }}</td>
+          <td>{{ parts[3] }}</td>
+          <td>{{ parts[4] }}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+    </table>
+
+    <h2>⚙️ الإعدادات</h2>
+    <form method="post" action="/admin/settings">
+      <label>رسالة الترحيب:</label><br>
+      <input type="text" name="welcome_message" value="{{ settings['welcome_message'] }}" style="width:100%"><br><br>
+
+      <label>الحساب البنكي:</label><br>
+      <input type="text" name="bank_account" value="{{ settings['bank_account'] }}" style="width:100%"><br><br>
+
+      <label>سعر الاشتراك:</label><br>
+      <input type="text" name="subscription_price" value="{{ settings['subscription_price'] }}" style="width:100%"><br><br>
+
+      <label>نص الإعلان:</label><br>
+      <textarea name="ads_text" rows="2" style="width:100%">{{ settings['ads_text'] }}</textarea><br>
+      <label><input type="checkbox" name="ads_enabled" {% if settings['ads_enabled'] %}checked{% endif %}> تفعيل الإعلان</label><br><br>
+
+      <button type="submit">💾 حفظ الإعدادات</button>
     </form>
-
-    {% if answer %}
-    <section class="answer">
-      <h2>{{ 'الشرح الرياضي:' if math_mode else 'الإجابة:' }}</h2>
-      <pre>{{ answer }}</pre>
-      {% if elapsed %}<div class="elapsed">⏱️ الوقت: {{ elapsed }}ms</div>{% endif %}
-    </section>
-    {% endif %}
-
-    {% if social_links and q %}
-    <section class="social">
-      <h3>بحث اجتماعي سريع (اضغط لفتح):</h3>
-      <ul class="link-list">
-        {% for name,url in social_links %}
-          <li><a href="{{ url }}" target="_blank" rel="noopener">{{ name }}</a></li>
-        {% endfor %}
-      </ul>
-    </section>
-    {% endif %}
-
-    {% if comment_links and q %}
-    <section class="social">
-      <h3>روابط نقاشات/تعليقات:</h3>
-      <ul class="link-list">
-        {% for name,url in comment_links %}
-          <li><a href="{{ url }}" target="_blank" rel="noopener">{{ name }}</a></li>
-        {% endfor %}
-      </ul>
-    </section>
-    {% endif %}
-
-    {% if sources and not math_mode %}
-    <section class="sources">
-      <h3>المصادر:</h3>
-      <ol>
-        {% for s in sources %}
-          <li>
-            <a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>
-            <span class="site">— {{ s.site }}</span>
-          </li>
-        {% endfor %}
-      </ol>
-
-      {% if pages and pages > 1 %}
-        <div class="pager">
-          {% if page > 1 %}
-            <form method="post" action="/search">
-              <input type="hidden" name="q" value="{{ q }}">
-              <input type="hidden" name="page" value="{{ page - 1 }}">
-              <button>&laquo; السابق</button>
-              <input type="hidden" name="enable_social" value="{{ 'on' if social_links else '' }}">
-              <input type="hidden" name="enable_comments" value="{{ 'on' if comment_links else '' }}">
-            </form>
-          {% endif %}
-          <span>صفحة {{ page }} / {{ pages }}</span>
-          {% if page < pages %}
-            <form method="post" action="/search">
-              <input type="hidden" name="q" value="{{ q }}">
-              <input type="hidden" name="page" value="{{ page + 1 }}">
-              <button>التالي &raquo;</button>
-              <input type="hidden" name="enable_social" value="{{ 'on' if social_links else '' }}">
-              <input type="hidden" name="enable_comments" value="{{ 'on' if comment_links else '' }}">
-            </form>
-          {% endif %}
-        </div>
-      {% endif %}
-    </section>
-    {% endif %}
   </div>
 </body>
 </html>
