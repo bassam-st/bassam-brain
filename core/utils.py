@@ -42,3 +42,31 @@ def log_block(ip, user_name, question, reason="محتوى مخالف"):
         if not file_exists:
             writer.writerow(["timestamp", "ip", "user_name", "question", "reason"])
         writer.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), ip, user_name, question, reason])
+# === ترجمة تلقائية إلى العربية عند الحاجة ===
+from typing import Optional
+try:
+    from langdetect import detect
+    from deep_translator import GoogleTranslator
+except Exception:
+    # في حال لم تُثبَّت المكتبات بعد أثناء البيلد
+    detect = None
+    GoogleTranslator = None
+
+def ensure_arabic(text: Optional[str]) -> str:
+    """
+    يعيد النص كما هو إذا كان عربيًا،
+    وإلا يترجمه تلقائيًا إلى العربية.
+    في حال حدوث خطأ، يعيد النص الأصلي بدون كسر.
+    """
+    if not text:
+        return ""
+    try:
+        if detect is None or GoogleTranslator is None:
+            return text  # أول تشغيل قبل التثبيت
+        lang = detect(text)
+        if lang != "ar":
+            return GoogleTranslator(source="auto", target="ar").translate(text)
+        return text
+    except Exception as e:
+        print("translation error:", e)
+        return text
