@@ -1,3 +1,6 @@
+import os
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("cache", exist_ok=True)
 # main.py — Bassam الذكي / ALSHOTAIMI v13.6
 import os, json, time, traceback, re
 from typing import Optional, List, Dict
