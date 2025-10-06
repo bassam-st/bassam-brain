@@ -1,46 +1,47 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي – بحث عميق</title>
-  <link rel="manifest" href="/static/pwa/manifest.json">
-  <meta name="theme-color" content="#0b0f19"/>
-  <link rel="stylesheet" href="/static/style.css"/>
-</head>
 <script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/static/pwa/sw.js").catch(()=>{});
-    });
-  }
-</script><body>
-  <header class="top">
-    <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
-    <div class="actions">
-      <button id="installBtn" hidden>تثبيت التطبيق</button>
-      <button id="themeBtn" title="الوضع الليلي/النهاري">🌙/☀️</button>
-    </div>
-  </header>
+document.addEventListener("DOMContentLoaded", () => {
+  const form   = document.getElementById("searchForm");
+  const input  = document.getElementById("q");
+  const price  = document.getElementById("price_links"); // صندوق "روابط الأسعار" إن وجد
+  const btn    = document.getElementById("goBtn");       // زر "بحث"
+  const answer = document.getElementById("answer");      // مكان عرض النتيجة
 
-  <section class="card">
-    <form id="searchForm" class="row">
-      <input id="q" placeholder="اكتب سؤالك…"/>
-      <label class="chk"><input type="checkbox" id="want_prices"/> روابط الأسعار</label>
-      <button>بحث</button>
-    </form>
-  </section>
+  async function doSearch(e){
+    e.preventDefault();               // منع إعادة تحميل الصفحة
+    const q = (input.value || "").trim();
+    if (!q){ input.focus(); return; }
 
-  <main id="answer"></main>
-  <footer><p>© Bassam AI — 2025</p></footer>
+    // حالة تحميل بسيطة
+    btn.disabled = true;
+    const old = btn.innerText;
+    btn.innerText = "يبحث…";
+    answer.innerHTML = `<div class="loading">🔎 جاري البحث والتحليل…</div>`;
 
-  <!-- 🔹 هنا نضيف كود تفعيل Service Worker -->
-  <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/static/pwa/sw.js").catch(()=>{});
-      });
+    try{
+      const fd = new FormData();
+      fd.append("q", q);
+      if (price && price.checked) fd.append("price_links", "on");
+
+      const res = await fetch("/search", { method: "POST", body: fd });
+      if (!res.ok){
+        const txt = await res.text();
+        throw new Error("HTTP " + res.status + ": " + txt);
+      }
+      const html = await res.text();     // الـ backend يُرجع HTML جاهز
+      answer.innerHTML = html;
+    }catch(err){
+      console.error(err);
+      answer.innerHTML = `
+        <div class="error">
+          حدث خطأ أثناء البحث. جرّب مرة أخرى.
+          <pre style="white-space:pre-wrap">${String(err)}</pre>
+        </div>`;
+    }finally{
+      btn.disabled = false;
+      btn.innerText = old;
     }
-  </script>
-</body>
-</html>
+  }
+
+  form.addEventListener("submit", doSearch);
+});
+</script>
