@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>نتائج البحث — {{ q }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>النتائج (المحرك: {{ used }})</h1>
+    <p>سؤالك: <strong>{{ q }}</strong></p>
+
+    {% if results and results|length > 0 %}
+      <ul class="results">
+        {% for r in results %}
+          <li>
+            <a class="link" href="{{ r.link }}" target="_blank" rel="noopener">
+              {{ r.title or r.link }}
+            </a>
+            {% if r.snippet %}<p class="snippet">{{ r.snippet }}</p>{% endif %}
+            <span class="badge">{{ r.source }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>لم أجد نتائج كافية، جرّب تعديل صياغة السؤال.</p>
+    {% endif %}
+
+    <p><a href="/" class="btn">رجوع</a></p>
+  </main>
+</body>
+</html>
