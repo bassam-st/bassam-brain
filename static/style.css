@@ -1,89 +1,17 @@
-/* static/style.css — Bassam ALSHOTAIMI v13.6 */
-
-/* ألوان وخلفية عامة */
-:root { color-scheme: dark light; }
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-
-body {
-  font-family: system-ui, -apple-system, Segoe UI, Tahoma, Arial, "Noto Sans Arabic", "Cairo", sans-serif;
-  background: #0b0f19;
-  color: #eaeef8;
-  line-height: 1.7;
-  padding: 16px;
-}
-
-/* الحاويات والبطاقات */
-.container { max-width: 980px; margin: 0 auto; }
-.card {
-  background: #101625;
-  border: 1px solid #182033;
-  border-radius: 16px;
-  padding: 16px;
-  margin: 12px 0;
-  box-shadow: 0 10px 25px rgba(0,0,0,.25);
-}
-
-/* صفوف وعناصر إدخال */
-.row { display: flex; flex-wrap: wrap; gap: 8px; }
-input[type="text"], input[type="password"], input[type="search"], input[type="file"], textarea {
-  flex: 1;
-  min-width: 200px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid #223;
-  background: #0e1422;
-  color: #eaeef8;
-  outline: none;
-}
-textarea { resize: vertical; }
-button, .btn {
-  background: #7b6cff;
-  color: #fff;
-  border: 0;
-  border-radius: 12px;
-  padding: 10px 16px;
-  cursor: pointer;
-  transition: transform .08s ease, opacity .15s ease;
-}
-button:hover, .btn:hover { opacity: .95; }
-button:active, .btn:active { transform: translateY(1px) scale(.99); }
-
-/* عناوين ونصوص مساعدة */
-h1, h2, h3 { margin: 0 0 8px; }
-.muted { color: #9bb1d0; font-size: 13px; }
-.badge {
-  display: inline-block;
-  background: #0d2037;
-  border: 1px solid #243555;
-  padding: 4px 10px;
-  border-radius: 10px;
-  font-size: 13px;
-}
-
-/* منطقة الإجابة والمصادر */
-.answer { white-space: pre-wrap; margin-top: 10px; }
-.sources { margin-top: 8px; font-size: 14px; }
-.sources a { color: #7fb2ff; text-decoration: underline; word-break: break-all; }
-
-/* الجداول للوحة الإشراف */
-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-th, td {
-  border-bottom: 1px solid #223;
-  padding: 8px 10px;
-  text-align: right;
-  font-size: 13px;
-}
-th { background: #151d2b; }
-tr:nth-child(even) { background: #0e1422; }
-
-/* روابط عامة */
-a { color: #7fb2ff; }
-a:hover { opacity: .9; }
-
-/* استجابة الهواتف */
-@media (max-width: 520px) {
-  body { padding: 12px; }
-  .card { padding: 12px; border-radius: 14px; }
-  input, button { font-size: 15px; }
-}
+:root{--bg:#0f172a;--card:#111827;--text:#e5e7eb;--muted:#94a3b8;--brand:#8b5cf6;--danger:#ef4444}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto}
+.container{max-width:900px;margin:32px auto;padding:0 16px}
+h1{font-size:28px;margin:0 0 16px}h2{margin:0 0 12px}
+.card{background:var(--card);padding:16px;border-radius:12px;margin:16px 0}
+.input{width:100%;padding:12px;border-radius:10px;border:none;background:#0b1220;color:var(--text);margin:8px 0}
+.btn{background:var(--brand);border:none;color:#fff;padding:10px 16px;border-radius:10px;cursor:pointer}
+.btn.danger{background:var(--danger)}
+.inline{display:inline-flex;gap:8px;align-items:center;margin-right:8px}
+.results{list-style:none;padding:0;margin:12px 0}
+.results li{padding:12px;border-bottom:1px solid #1f2937}
+.link{color:#60a5fa;text-decoration:none}
+.snippet{color:var(--muted);margin:6px 0 0}
+.badge{background:#1f2937;color:#e5e7eb;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px}
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{border-bottom:1px solid #1f2937;padding:8px;text-align:right}
+footer{margin-top:24px;color:var(--muted)}
