@@ -2,104 +2,47 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
-
-  <!-- PWA -->
-  <link rel="manifest" href="/static/pwa/manifest.json">
-  <meta name="theme-color" content="#0b0f19"/>
-
-  <!-- CSS -->
-  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/style.css">
+  <meta name="theme-color" content="#0f172a"/>
 </head>
 <body>
-<header class="top">
-  <h1>بسام الذكي 🔎 — بحث عميق وتلخيص تلقائي</h1>
-  <div class="actions">
-    <button id="installBtn" hidden>تثبيت التطبيق</button>
-    <button id="themeBtn" title="الوضع الليلي/النهاري">☀️/🌙</button>
-  </div>
-</header>
+  <main class="container">
+    <h1>بسام الذكي — 🔎 بحث عميق وتلخيص تلقائي</h1>
 
-<section class="card">
-  <form id="searchForm" class="row">
-    <label class="chk"><input type="checkbox" id="price_links" name="price_links"/> روابط الأسعار</label>
-    <input id="q" name="q" placeholder="اكتب سؤالك..." required/>
-    <button id="goBtn" type="submit">بحث</button>
-  </form>
-</section>
+    <section class="card">
+      <form method="post" action="/search">
+        <label class="inline">
+          <input type="checkbox" name="include_prices">
+          روابط الأسعار
+        </label>
+        <input class="input" name="q" placeholder="اكتب سؤالك..." required>
+        <button class="btn" type="submit">بحث</button>
+      </form>
+    </section>
 
-<main id="answer" class="card answer"></main>
+    <section class="card">
+      <h2>بحث بالصورة (كاميرا/ملفات)</h2>
+      <form method="post" action="/search_image" enctype="multipart/form-data">
+        <input class="input" type="file" name="image" accept="image/*" capture="environment" required>
+        <button class="btn" type="submit">ارفع الصورة وابحث</button>
+      </form>
+      <small>بعد الرفع ستظهر أزرار تفتح لك البحث مباشرة في Google Lens أو Bing Visual Search…</small>
+    </section>
 
-<footer class="foot">© Bassam AI — 2025</footer>
+    <footer>
+      <a href="/admin">لوحة الإدارة</a> • Bassam AI © 2025
+    </footer>
+  </main>
 
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-  // Theme toggle
-  const themeBtn = document.getElementById("themeBtn");
-  themeBtn.addEventListener("click", () => {
-    const dark = document.body.classList.toggle("dark");
-    localStorage.setItem("theme", dark ? "dark" : "light");
-  });
-  if(localStorage.getItem("theme") === "dark") document.body.classList.add("dark");
-
-  // PWA install prompt
-  const installBtn = document.getElementById("installBtn");
-  let deferredPrompt;
-  window.addEventListener("beforeinstallprompt", e => {
-    e.preventDefault();
-    deferredPrompt = e;
-    installBtn.hidden = false;
-  });
-  installBtn.addEventListener("click", async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const choice = await deferredPrompt.userChoice;
-    deferredPrompt = null;
-    installBtn.hidden = true;
-  });
-
-  // البحث
-  const form   = document.getElementById("searchForm");
-  const input  = document.getElementById("q");
-  const price  = document.getElementById("price_links");
-  const btn    = document.getElementById("goBtn");
-  const answer = document.getElementById("answer");
-
-  async function doSearch(e){
-    e.preventDefault();
-    const q = (input.value || "").trim();
-    if (!q){ input.focus(); return; }
-
-    btn.disabled = true;
-    const old = btn.innerText;
-    btn.innerText = "يبحث…";
-    answer.innerHTML = `<div class="loading">🔎 جاري البحث والتحليل...</div>`;
-
-    try {
-      const fd = new FormData();
-      fd.append("q", q);
-      if (price && price.checked) fd.append("price_links", "on");
-
-      const res = await fetch("/search", { method: "POST", body: fd });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error("HTTP " + res.status + ": " + txt);
-      }
-      const html = await res.text();
-      answer.innerHTML = html;
-    } catch (err) {
-      console.error(err);
-      answer.innerHTML = `<div class="error">⚠️ حدث خطأ أثناء البحث. حاول مرة أخرى.<br><pre>${String(err)}</pre></div>`;
-    } finally {
-      btn.disabled = false;
-      btn.innerText = old;
+  <!-- تسجيل Service Worker للتثبيت كـ PWA -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/static/sw.js").catch(()=>{});
+      });
     }
-  }
-
-  form.addEventListener("submit", doSearch);
-});
-</script>
-
+  </script>
 </body>
 </html>
