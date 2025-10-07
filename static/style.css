@@ -2,7 +2,10 @@
   --bg:#0b0f19; --card:#121826; --muted:#98a2b3; --pri:#7c3aed; --ok:#1abc9c; --err:#ec5b5b;
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif}
+body{
+  margin:0; background:var(--bg); color:#e5e7eb;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif
+}
 a{color:#c4b5fd;text-decoration:none} a:hover{text-decoration:underline}
 
 .hero{display:grid;place-items:center;padding:28px 12px}
@@ -10,45 +13,84 @@ a{color:#c4b5fd;text-decoration:none} a:hover{text-decoration:underline}
 .hero-img{width:84px;height:84px;border-radius:22px;display:block}
 h1{margin:10px 0;font-weight:700;text-align:center}
 
-.card{max-width:860px;margin:16px auto;background:var(--card);border-radius:18px;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-.row{display:flex;gap:10px}
-.row input[type="text"], .row input[type="file"]{flex:1;padding:12px 14px;border-radius:12px;border:none;background:#0f1421;color:#fff}
+.card{
+  max-width:860px; margin:16px auto; background:var(--card);
+  border-radius:18px; padding:18px 16px; box-shadow:0 10px 30px rgba(0,0,0,.25)
+}
 
-button{padding:12px 16px;border-radius:12px;border:none;background:var(--pri);color:#fff;font-weight:700;cursor:pointer}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row input[type="text"], .row input[type="file"]{
+  flex:1; min-width:220px; padding:12px 14px; border-radius:12px; border:none;
+  background:#0f1421; color:#fff
+}
+
+button{
+  padding:12px 16px; border-radius:12px; border:none;
+  background:var(--pri); color:#fff; font-weight:700; cursor:pointer
+}
 button:hover{background:#6d28d9}
+.install-btn{
+  position:fixed; right:14px; bottom:14px; z-index:9999;
+  background:#7c3aed; color:#fff; border:none; border-radius:12px; padding:10px 14px; font-weight:700
+}
+
 .btn{display:inline-block;padding:10px 14px;border-radius:12px;background:#334155;color:#fff}
 .btn-alt{background:transparent;border:1px dashed #475569;color:#e5e7eb}
 
 .ok{color:var(--ok)} .err{color:var(--err)}
 .preview{margin-top:10px}
 .preview-img{width:100%;max-width:100%;border-radius:10px}
-.links{display:flex;gap:10px;margin-top:10px}
+.links{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
 
 .results{list-style:none;padding:0;margin:0}
 .results li{padding:12px;border-bottom:1px solid #1f2937}
 .results small{display:block;color:var(--muted);margin-top:6px}
 
 .footer{max-width:860px;margin:24px auto;color:var(--muted);text-align:center}
-
 h3{margin-top:0}
 
- /* صندوق الملخّص (يبقى داخل الكارد) */
-.summary{
+/* صندوق الملخّص */
+.summary, .results-container{
+  position:relative;
   background:#0f1220;
   border:1px solid #2a2f45;
   border-radius:16px;
   padding:12px 14px;
-  max-height:220px;     /* ارتفاع ثابت */
-  overflow:auto;        /* تمرير داخلي */
+  transition:max-height .25s ease;
 }
-.sumText{
+.summary.collapsed, .results-container.collapsed{
+  max-height:220px; overflow:auto;
+}
+@media (min-width:640px){
+  .summary.collapsed, .results-container.collapsed{ max-height:260px; }
+}
+.summary.expanded, .results-container.expanded{
+  max-height:none; overflow:visible;
+}
+
+.summary-fade{
+  content:"";
+  position:absolute; left:0; right:0; bottom:0;
+  height:56px;
+  background:linear-gradient(to top, #0f1220 60%, rgba(15,18,32,0));
+  pointer-events:none; display:block;
+}
+.summary.expanded .summary-fade,
+.results-container.expanded .summary-fade{
+  display:none;
+}
+
+.sumText, .results{
   margin:0;
-  padding-inline-start: 20px;  /* نقاط مرتبة */
+  padding-inline-start: 20px;
   white-space:normal;
   word-wrap:break-word;
   line-height:1.7;
 }
 
-@media (min-width: 640px){
-  .summary{ max-height:260px; }
+.summary-actions{ display:flex; justify-content:center; margin-top:10px; }
+.more-btn{
+  background:transparent; color:#c4b5fd; border:1px solid #475569;
+  padding:8px 14px; border-radius:10px; cursor:pointer; font-weight:700
 }
+.more-btn:hover{ background:#1f2937; }
