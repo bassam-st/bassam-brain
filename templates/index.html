@@ -3,11 +3,9 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي 🔍 بحث + تلخيص فوري</title>
+  <title>بسام الذكي 🔍 البحث والتلخيص</title>
 
   <meta name="theme-color" content="#7c3aed"/>
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
 
@@ -18,66 +16,37 @@
     <div class="avatar-glow">
       <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
     </div>
-    <h1>🤖 بسام الذكي — مساعدك في البحث والتلخيص</h1>
+    <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
   </section>
 
   <!-- نموذج البحث -->
   <section class="card">
-    <form action="/search" method="post" class="row">
+    <form action="/search" method="post">
       <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-      <input type="hidden" name="page" value="0"/>
       <button type="submit">بحث</button>
     </form>
+    {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- ملخص فوري -->
-  {% if summary_pages %}
+  <!-- ملخص مختصر مع زر عرض المزيد -->
+  {% if summary %}
   <section class="card">
     <h3>🧠 ملخّص سريع</h3>
-    <div id="summaryBox">{{ summary_pages[summary_page] }}</div>
-
-    <div class="pager">
-      {% if summary_page > 0 %}
-      <form action="/search" method="post">
-        <input type="hidden" name="q" value="{{ query }}"/>
-        <input type="hidden" name="page" value="{{ summary_page - 1 }}"/>
-        <button type="submit" class="btn-alt">السابق</button>
-      </form>
+    <div id="sumBox" class="summary collapsed" data-full="{{ summary|replace('\n','&#10;') }}">
+      <!-- نظهر أول 3 سطور فقط مبدئيًا -->
+      {% set lines = summary.split('\n') %}
+      <pre id="sumText">{{ ('\n').join(lines[:3]) }}</pre>
+      {% if lines|length > 3 %}
+      <button id="moreBtn" class="btn btn-alt">عرض المزيد</button>
       {% endif %}
-      <span>صفحة {{ summary_page + 1 }} / {{ summary_total }}</span>
-      {% if summary_page + 1 < summary_total %}
-      <form action="/search" method="post">
-        <input type="hidden" name="q" value="{{ query }}"/>
-        <input type="hidden" name="page" value="{{ summary_page + 1 }}"/>
-        <button type="submit">التالي</button>
-      </form>
-      {% endif %}
-      <button id="copyBtn" class="btn-ghost">نسخ الملخّص</button>
     </div>
-
-    <!-- سؤال متابعة -->
-    <form action="/follow" method="post" class="row follow">
-      <input type="hidden" name="base_q" value="{{ query }}"/>
-      <input type="text" name="follow_q" placeholder="عندك سؤال متابعة؟ اكتب هنا..."/>
-      <input type="hidden" name="page" value="0"/>
-      <button type="submit">تابِع السؤال</button>
-    </form>
-
-    <details class="sources">
-      <summary>المصادر</summary>
-      <ul>
-        {% for r in results %}
-        <li><a href="{{ r.link }}" target="_blank">{{ r.title }}</a><em>{{ r.source or engine_used }}</em></li>
-        {% endfor %}
-      </ul>
-    </details>
   </section>
   {% endif %}
 
   <!-- رفع صورة -->
   <section class="card">
     <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form action="/upload" method="post" enctype="multipart/form-data" class="row">
+    <form action="/upload" method="post" enctype="multipart/form-data">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -85,19 +54,17 @@
     {% if uploaded_image %}
     <div class="preview">
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
-      <img src="/uploads/{{ uploaded_image }}" class="preview-img" alt="الصورة"/>
+      <img src="/uploads/{{ uploaded_image }}" class="preview-img" alt="الصورة المرفوعة"/>
       <div class="links">
         <a class="btn" target="_blank" href="{{ google_lens }}">بحث في Google Lens</a>
-        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing Visual</a>
+        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing Visual Search</a>
       </div>
     </div>
     {% endif %}
-
-    {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- نتائج خام (اختياري) -->
-  {% if results and not summary_pages %}
+  <!-- النتائج (المصادر) -->
+  {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
     <ul class="results">
@@ -116,22 +83,36 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
+  <!-- SW + زر تثبيت -->
   <script>
-    // زر نسخ الملخّص
-    const btn = document.getElementById("copyBtn");
-    if (btn) {
-      btn.addEventListener("click", async () => {
-        try {
-          const txt = document.getElementById("summaryBox").innerText;
-          await navigator.clipboard.writeText(txt);
-          btn.textContent = "تم النسخ ✓";
-          setTimeout(()=>btn.textContent="نسخ الملخّص",1500);
-        } catch(e) { alert("تعذّر النسخ"); }
-      });
-    }
-    // Service Worker على الجذر
+    // زر تثبيت
+    let deferredPrompt;
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault(); deferredPrompt = e;
+      const btn = document.createElement("button");
+      btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
+      btn.className = "install-btn";
+      document.body.appendChild(btn);
+      btn.onclick = async () => {
+        btn.style.display = "none";
+        deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null;
+      };
+    });
+
+    // SW
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(()=>{});
+      navigator.serviceWorker.register("/sw.js").catch(console.error);
+    }
+
+    // توسعة الملخص
+    const moreBtn = document.getElementById("moreBtn");
+    if (moreBtn) {
+      moreBtn.addEventListener("click", () => {
+        const box  = document.getElementById("sumBox");
+        const txt  = document.getElementById("sumText");
+        txt.textContent = box.dataset.full.replace(/&#10;/g, "\n");
+        moreBtn.remove();
+      });
     }
   </script>
 </body>
