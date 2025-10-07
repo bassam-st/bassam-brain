@@ -3,55 +3,54 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
+  <title>بسام الذكي — بحث عميق وتلخيص تلقائي</title>
 
-  <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
-
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 
 <body>
-  <!-- هيدر -->
   <section class="hero">
     <div class="avatar-glow">
       <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
     </div>
-    <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
+    <h1>بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
   </section>
 
-  <!-- بحث نصّي -->
   <section class="card">
-    <form id="searchForm" action="/search" method="post">
+    <form id="searchForm" action="/search" method="post" class="row">
       <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
       <button type="submit">بحث</button>
     </form>
-
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- صندوق الملخص (داخل كارد وبداخل صندوق تمرير) -->
   {% if bullets %}
   <section class="card">
-    <h3>🧠 ملخّص سريع</h3>
-    <div class="summary">
+    <h3>ملخّص سريع</h3>
+
+    <div class="summary collapsed" id="summaryBox">
       <ul class="sumText">
         {% for b in bullets %}
         <li>{{ b }}</li>
         {% endfor %}
       </ul>
+      <div class="summary-fade" aria-hidden="true"></div>
+    </div>
+
+    <div class="summary-actions">
+      <button type="button" class="more-btn" id="toggleSummary">عرض المزيد</button>
     </div>
   </section>
   {% endif %}
 
-  <!-- بحث بالصور -->
   <section class="card">
-    <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+    <h3>بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
+    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data" class="row">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -62,25 +61,32 @@
       <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
       <div class="links">
         <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
-        <a href="{{ bing_visual }}" target="_blank" class="btn btn-alt">بحث في Bing Visual Search</a>
+        <a href="{{ bing_visual }}" target="_blank" class="btn btn-alt">بحث في Bing Visual</a>
       </div>
     </div>
     {% endif %}
   </section>
 
-  <!-- النتائج -->
   {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
-    <ul class="results">
-      {% for r in results %}
-      <li>
-        <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
-        <small>{{ r.snippet }}</small>
-        <em>{{ r.source }}</em>
-      </li>
-      {% endfor %}
-    </ul>
+
+    <div class="results-container collapsed" id="resultsBox">
+      <ul class="results">
+        {% for r in results %}
+        <li>
+          <a href="{{ r.link }}" target="_blank">{{ r.title }}</a>
+          <small>{{ r.snippet }}</small>
+          <em>{{ r.source }}</em>
+        </li>
+        {% endfor %}
+      </ul>
+      <div class="summary-fade" aria-hidden="true"></div>
+    </div>
+
+    <div class="summary-actions">
+      <button type="button" class="more-btn" id="toggleResults">عرض المزيد</button>
+    </div>
   </section>
   {% endif %}
 
@@ -88,8 +94,8 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- زر تثبيت + تسجيل SW -->
   <script>
+    // زر تثبيت
     let deferredPrompt;
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
@@ -105,11 +111,39 @@
         deferredPrompt = null;
       });
     });
+
+    // Service Worker
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js")
         .then(() => console.log("SW ✅"))
         .catch(err => console.error("SW ❌", err));
     }
+
+    // عرض المزيد للملخّص
+    (function () {
+      const box = document.getElementById('summaryBox');
+      const btn = document.getElementById('toggleSummary');
+      if (box && btn) {
+        btn.addEventListener('click', () => {
+          const expanded = box.classList.toggle('expanded');
+          box.classList.toggle('collapsed', !expanded);
+          btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
+        });
+      }
+    })();
+
+    // عرض المزيد للمصادر
+    (function () {
+      const box = document.getElementById('resultsBox');
+      const btn = document.getElementById('toggleResults');
+      if (box && btn) {
+        btn.addEventListener('click', () => {
+          const expanded = box.classList.toggle('expanded');
+          box.classList.toggle('collapsed', !expanded);
+          btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
+        });
+      }
+    })();
   </script>
 </body>
 </html>
