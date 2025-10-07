@@ -3,14 +3,20 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي 🔍 البحث والتلخيص</title>
+  <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
 
+  <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
+
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
+
 <body>
+  <!-- هيدر -->
   <section class="hero">
     <div class="avatar-glow">
       <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
@@ -18,33 +24,34 @@
     <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
   </section>
 
-  <!-- نموذج البحث -->
+  <!-- بحث نصّي -->
   <section class="card">
-    <form action="/search" method="post">
+    <form id="searchForm" action="/search" method="post">
       <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
       <button type="submit">بحث</button>
     </form>
+
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- ملخص مختصر داخل صندوق ثابت -->
-  {% if summary %}
+  <!-- صندوق الملخص (داخل كارد وبداخل صندوق تمرير) -->
+  {% if bullets %}
   <section class="card">
     <h3>🧠 ملخّص سريع</h3>
-    <div id="sumBox" class="summary" data-full="{{ summary|replace('\n','&#10;') }}">
-      {% set lines = summary.split('\n') %}
-      <div id="sumText" class="sumText">{{ ('\n').join(lines[:3]) }}</div>
-      {% if lines|length > 3 %}
-      <button id="moreBtn" class="btn btn-alt">عرض المزيد</button>
-      {% endif %}
+    <div class="summary">
+      <ul class="sumText">
+        {% for b in bullets %}
+        <li>{{ b }}</li>
+        {% endfor %}
+      </ul>
     </div>
   </section>
   {% endif %}
 
-  <!-- رفع صورة -->
+  <!-- بحث بالصور -->
   <section class="card">
     <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form action="/upload" method="post" enctype="multipart/form-data">
+    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -52,18 +59,16 @@
     {% if uploaded_image %}
     <div class="preview">
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
-      <img src="/uploads/{{ uploaded_image }}" class="preview-img" alt="الصورة المرفوعة"/>
-      <div class="links grid-2">
-        <a class="btn" target="_blank" href="{{ google_lens }}">بحث في Google Lens</a>
-        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing</a>
-        <a class="btn btn-alt" target="_blank" href="{{ yandex_images }}">Yandex Images</a>
-        <a class="btn btn-alt" target="_blank" href="{{ tineye }}">TinEye</a>
+      <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
+      <div class="links">
+        <a href="{{ google_lens }}" target="_blank" class="btn">بحث في Google Lens</a>
+        <a href="{{ bing_visual }}" target="_blank" class="btn btn-alt">بحث في Bing Visual Search</a>
       </div>
     </div>
     {% endif %}
   </section>
 
-  <!-- النتائج (المصادر) -->
+  <!-- النتائج -->
   {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
@@ -83,30 +88,27 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- SW + زر تثبيت + منطق عرض المزيد -->
+  <!-- زر تثبيت + تسجيل SW -->
   <script>
     let deferredPrompt;
     window.addEventListener("beforeinstallprompt", (e) => {
-      e.preventDefault(); deferredPrompt = e;
+      e.preventDefault();
+      deferredPrompt = e;
       const btn = document.createElement("button");
       btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
       btn.className = "install-btn";
       document.body.appendChild(btn);
-      btn.onclick = async () => { btn.style.display="none"; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; };
-    });
-
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(console.error);
-    }
-
-    const moreBtn = document.getElementById("moreBtn");
-    if (moreBtn) {
-      moreBtn.addEventListener("click", () => {
-        const box = document.getElementById("sumBox");
-        const txt = document.getElementById("sumText");
-        txt.textContent = box.dataset.full.replace(/&#10;/g, "\n");
-        moreBtn.remove();
+      btn.addEventListener("click", async () => {
+        btn.style.display = "none";
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
       });
+    });
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js")
+        .then(() => console.log("SW ✅"))
+        .catch(err => console.error("SW ❌", err));
     }
   </script>
 </body>
