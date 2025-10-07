@@ -8,7 +8,6 @@
   <meta name="theme-color" content="#7c3aed"/>
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
-
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
@@ -28,14 +27,13 @@
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- ملخص مختصر مع زر عرض المزيد -->
+  <!-- ملخص مختصر داخل صندوق ثابت -->
   {% if summary %}
   <section class="card">
     <h3>🧠 ملخّص سريع</h3>
-    <div id="sumBox" class="summary collapsed" data-full="{{ summary|replace('\n','&#10;') }}">
-      <!-- نظهر أول 3 سطور فقط مبدئيًا -->
+    <div id="sumBox" class="summary" data-full="{{ summary|replace('\n','&#10;') }}">
       {% set lines = summary.split('\n') %}
-      <pre id="sumText">{{ ('\n').join(lines[:3]) }}</pre>
+      <div id="sumText" class="sumText">{{ ('\n').join(lines[:3]) }}</div>
       {% if lines|length > 3 %}
       <button id="moreBtn" class="btn btn-alt">عرض المزيد</button>
       {% endif %}
@@ -55,9 +53,11 @@
     <div class="preview">
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
       <img src="/uploads/{{ uploaded_image }}" class="preview-img" alt="الصورة المرفوعة"/>
-      <div class="links">
+      <div class="links grid-2">
         <a class="btn" target="_blank" href="{{ google_lens }}">بحث في Google Lens</a>
-        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing Visual Search</a>
+        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing</a>
+        <a class="btn btn-alt" target="_blank" href="{{ yandex_images }}">Yandex Images</a>
+        <a class="btn btn-alt" target="_blank" href="{{ tineye }}">TinEye</a>
       </div>
     </div>
     {% endif %}
@@ -83,9 +83,8 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- SW + زر تثبيت -->
+  <!-- SW + زر تثبيت + منطق عرض المزيد -->
   <script>
-    // زر تثبيت
     let deferredPrompt;
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault(); deferredPrompt = e;
@@ -93,23 +92,18 @@
       btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
       btn.className = "install-btn";
       document.body.appendChild(btn);
-      btn.onclick = async () => {
-        btn.style.display = "none";
-        deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null;
-      };
+      btn.onclick = async () => { btn.style.display="none"; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; };
     });
 
-    // SW
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(console.error);
     }
 
-    // توسعة الملخص
     const moreBtn = document.getElementById("moreBtn");
     if (moreBtn) {
       moreBtn.addEventListener("click", () => {
-        const box  = document.getElementById("sumBox");
-        const txt  = document.getElementById("sumText");
+        const box = document.getElementById("sumBox");
+        const txt = document.getElementById("sumText");
         txt.textContent = box.dataset.full.replace(/&#10;/g, "\n");
         moreBtn.remove();
       });
