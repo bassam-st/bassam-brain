@@ -3,9 +3,8 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي 🔍 بحث عميق وتلخيص تلقائي</title>
+  <title>بسام الذكي 🔍 بحث + تلخيص فوري</title>
 
-  <!-- PWA -->
   <meta name="theme-color" content="#7c3aed"/>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -14,43 +13,71 @@
 
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
-
 <body>
-  <!-- هيدر بالشعار -->
   <section class="hero">
     <div class="avatar-glow">
       <img src="/static/icons/icon-512.png" alt="بسام الذكي" class="hero-img"/>
     </div>
-    <h1>🤖 بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
+    <h1>🤖 بسام الذكي — مساعدك في البحث والتلخيص</h1>
   </section>
 
-  <!-- بحث نصّي -->
+  <!-- نموذج البحث -->
   <section class="card">
-    <form id="searchForm" action="/search" method="post">
-      <input type="text" name="q" value="{{ query or '' }}" placeholder="اكتب سؤالك هنا..." required/>
+    <form action="/search" method="post" class="row">
+      <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
+      <input type="hidden" name="page" value="0"/>
       <button type="submit">بحث</button>
     </form>
   </section>
 
-  <!-- ملخّص ذكي -->
-  {% if summary %}
+  <!-- ملخص فوري -->
+  {% if summary_pages %}
   <section class="card">
     <h3>🧠 ملخّص سريع</h3>
-    <pre class="summary">{{ summary }}</pre>
+    <div id="summaryBox">{{ summary_pages[summary_page] }}</div>
+
+    <div class="pager">
+      {% if summary_page > 0 %}
+      <form action="/search" method="post">
+        <input type="hidden" name="q" value="{{ query }}"/>
+        <input type="hidden" name="page" value="{{ summary_page - 1 }}"/>
+        <button type="submit" class="btn-alt">السابق</button>
+      </form>
+      {% endif %}
+      <span>صفحة {{ summary_page + 1 }} / {{ summary_total }}</span>
+      {% if summary_page + 1 < summary_total %}
+      <form action="/search" method="post">
+        <input type="hidden" name="q" value="{{ query }}"/>
+        <input type="hidden" name="page" value="{{ summary_page + 1 }}"/>
+        <button type="submit">التالي</button>
+      </form>
+      {% endif %}
+      <button id="copyBtn" class="btn-ghost">نسخ الملخّص</button>
+    </div>
 
     <!-- سؤال متابعة -->
-    <form action="/follow" method="post" class="follow">
-      <input type="hidden" name="prev_query" value="{{ query or '' }}"/>
-      <input type="text" name="follow" placeholder="عندك سؤال متابعة؟ اسأل هنا..." required/>
+    <form action="/follow" method="post" class="row follow">
+      <input type="hidden" name="base_q" value="{{ query }}"/>
+      <input type="text" name="follow_q" placeholder="عندك سؤال متابعة؟ اكتب هنا..."/>
+      <input type="hidden" name="page" value="0"/>
       <button type="submit">تابِع السؤال</button>
     </form>
+
+    <details class="sources">
+      <summary>المصادر</summary>
+      <ul>
+        {% for r in results %}
+        <li><a href="{{ r.link }}" target="_blank">{{ r.title }}</a><em>{{ r.source or engine_used }}</em></li>
+        {% endfor %}
+      </ul>
+    </details>
   </section>
   {% endif %}
 
-  <!-- بحث بالصور -->
+  <!-- رفع صورة -->
   <section class="card">
     <h3>🔎 بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+    <form action="/upload" method="post" enctype="multipart/form-data" class="row">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
     </form>
@@ -58,10 +85,10 @@
     {% if uploaded_image %}
     <div class="preview">
       {% if message %}<p class="ok">{{ message }}</p>{% endif %}
-      <img src="/uploads/{{ uploaded_image }}" alt="الصورة المرفوعة" class="preview-img"/>
+      <img src="/uploads/{{ uploaded_image }}" class="preview-img" alt="الصورة"/>
       <div class="links">
         <a class="btn" target="_blank" href="{{ google_lens }}">بحث في Google Lens</a>
-        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing Visual Search</a>
+        <a class="btn btn-alt" target="_blank" href="{{ bing_visual }}">بحث في Bing Visual</a>
       </div>
     </div>
     {% endif %}
@@ -69,8 +96,8 @@
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- نتائج -->
-  {% if results %}
+  <!-- نتائج خام (اختياري) -->
+  {% if results and not summary_pages %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
     <ul class="results">
@@ -89,28 +116,22 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- زر تثبيت + تسجيل SW -->
   <script>
-    let deferredPrompt;
-    window.addEventListener("beforeinstallprompt", (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      const btn = document.createElement("button");
-      btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
-      btn.className = "install-btn";
-      document.body.appendChild(btn);
+    // زر نسخ الملخّص
+    const btn = document.getElementById("copyBtn");
+    if (btn) {
       btn.addEventListener("click", async () => {
-        btn.style.display = "none";
-        deferredPrompt.prompt();
-        await deferredPrompt.userChoice;
-        deferredPrompt = null;
+        try {
+          const txt = document.getElementById("summaryBox").innerText;
+          await navigator.clipboard.writeText(txt);
+          btn.textContent = "تم النسخ ✓";
+          setTimeout(()=>btn.textContent="نسخ الملخّص",1500);
+        } catch(e) { alert("تعذّر النسخ"); }
       });
-    });
-
+    }
+    // Service Worker على الجذر
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js")
-        .then(() => console.log("SW registered ✅"))
-        .catch(err => console.error("SW error ❌", err));
+      navigator.serviceWorker.register("/sw.js").catch(()=>{});
     }
   </script>
 </body>
