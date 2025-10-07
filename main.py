@@ -1,5 +1,5 @@
-# main.py — Bassam Brain (ملخّص مختصر + مصادر مرتّبة + بحث صور + لوحة إدارة)
-import os, uuid, sqlite3, hashlib, traceback, re, difflib
+# main.py — Bassam Brain (ملخّص مختصر + دمج نتائج + بحث صور مُعزَّز + لوحة إدارة)
+import os, uuid, sqlite3, hashlib, traceback, re
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -11,7 +11,6 @@ from fastapi.templating import Jinja2Templates
 import httpx
 from duckduckgo_search import DDGS
 
-# ===== مسارات
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR    = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
@@ -19,41 +18,33 @@ UPLOADS_DIR   = os.path.join(BASE_DIR, "uploads")
 DATA_DIR      = os.path.join(BASE_DIR, "data")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
-
 DB_PATH = os.path.join(DATA_DIR, "bassam.db")
 
-# ===== تطبيق
 app = FastAPI(title="Bassam Brain")
 app.mount("/static",  StaticFiles(directory=STATIC_DIR),  name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# ===== مفاتيح
 SERPER_API_KEY  = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
 ADMIN_PASSWORD  = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET    = os.getenv("ADMIN_SECRET",   "bassam-secret")
 
-# ===== قاعدة بيانات (سجلات بسيطة)
 def db():
-    c = sqlite3.connect(DB_PATH); c.row_factory = sqlite3.Row
-    return c
-
+    c = sqlite3.connect(DB_PATH); c.row_factory = sqlite3.Row; return c
 with db() as con:
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS logs(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          ts TEXT, type TEXT, query TEXT, file_name TEXT,
-          engine_used TEXT, ip TEXT, ua TEXT
-        )
-    """)
+    con.execute("""CREATE TABLE IF NOT EXISTS logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT, type TEXT, query TEXT, file_name TEXT,
+        engine_used TEXT, ip TEXT, ua TEXT
+    )""")
 
 def log_event(t, ip, ua, query=None, file_name=None, engine=None):
     with db() as con:
         con.execute("INSERT INTO logs(ts,type,query,file_name,engine_used,ip,ua) VALUES (?,?,?,?,?,?,?)",
-            (datetime.utcnow().isoformat(timespec="seconds")+"Z", t, query, file_name, engine, ip, ua))
+                    (datetime.utcnow().isoformat(timespec="seconds")+"Z", t, query, file_name, engine, ip, ua))
 
-# ===== أدوات مساعدة
+# ------------ helpers ------------
 def _clean(q: str) -> str:
     q = (q or "").strip()
     q = re.sub(r"[^\w\s\u0600-\u06FF]", " ", q)
@@ -63,32 +54,24 @@ def _clean(q: str) -> str:
 def _sentences(text: str) -> List[str]:
     parts = re.split(r"[.!؟\n]+", text or "")
     parts = [p.strip() for p in parts if len(p.strip()) > 3]
-    # إزالة التكرار
     seen, out = set(), []
     for s in parts:
         k = s[:70]
-        if k in seen: 
-            continue
+        if k in seen: continue
         seen.add(k); out.append(s)
     return out
 
 def make_bullet_summary(snippets: List[str], max_points=6, max_chars=600) -> str:
-    """ملخّص مختصر بنقاط، مع حدود واضحة حتى لا يطول."""
     all_text = " ".join(snippets)[:3000]
     sents = _sentences(all_text)
-    # انتقاء جُمل متنوعة (طبية/تعريف/فوائد… بشكل بسيط)
-    picked = []
+    picked, size = [], 0
     for s in sents:
-        if len(" • ".join(picked))+len(s) > max_chars: 
-            break
-        picked.append(s)
-        if len(picked) >= max_points: 
-            break
-    if not picked:
-        return "لم أجد محتوى كافيًا للملخّص. هذه أهم الروابط أدناه 👇"
-    return "\n".join(f"• {s}" for s in picked)
+        if size + len(s) > max_chars: break
+        picked.append(f"• {s}"); size += len(s)
+        if len(picked) >= max_points: break
+    return "\n".join(picked) if picked else "لم أجد محتوى كافيًا. الروابط أدناه 👇"
 
-# ===== بحث
+# ------------ search ------------
 async def search_google_serper(q: str, num=8) -> List[Dict]:
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
@@ -99,45 +82,50 @@ async def search_google_serper(q: str, num=8) -> List[Dict]:
         data = r.json()
     out = []
     for it in (data.get("organic", []) or [])[:num]:
-        out.append({
-            "title": it.get("title"),
-            "link": it.get("link"),
-            "snippet": it.get("snippet") or "",
-            "source": "Google",
-        })
+        out.append({"title": it.get("title"), "link": it.get("link"),
+                    "snippet": it.get("snippet") or "", "source": "Google"})
     return out
 
 def search_duckduckgo(q: str, num=8) -> List[Dict]:
     out = []
     with DDGS() as ddgs:
         for r in ddgs.text(q, region="xa-ar", safesearch="moderate", max_results=num):
-            out.append({
-                "title": r.get("title"),
-                "link":  r.get("href") or r.get("url"),
-                "snippet": r.get("body") or "",
-                "source": "DuckDuckGo",
-            })
+            out.append({"title": r.get("title"),
+                        "link": r.get("href") or r.get("url"),
+                        "snippet": r.get("body") or "", "source": "DuckDuckGo"})
             if len(out) >= num: break
+    return out
+
+def dedupe(results: List[Dict]) -> List[Dict]:
+    seen, out = set(), []
+    for r in results:
+        key = (r.get("title","")[:80] + r.get("link","")).lower()
+        if key in seen: continue
+        seen.add(key); out.append(r)
     return out
 
 async def smart_search(q: str) -> Dict:
     q = _clean(q)
     try:
+        results, used = [], None
+        # نجمع من المحركين ونزيل التكرار
         if SERPER_API_KEY:
             try:
-                results = await search_google_serper(q)
-                used = "Google"
+                g = await search_google_serper(q); used = "Google"
             except Exception:
-                results = search_duckduckgo(q); used = "DuckDuckGo"
+                g = []
+            d = search_duckduckgo(q)
+            results = dedupe(g + d)[:10]
+            used = "Google+DuckDuckGo" if g else "DuckDuckGo"
         else:
             results = search_duckduckgo(q); used = "DuckDuckGo"
-        summary = make_bullet_summary([r["snippet"] for r in results], max_points=6, max_chars=600)
+        summary = make_bullet_summary([r["snippet"] for r in results], 6, 600)
         return {"ok": True, "used": used, "summary": summary, "results": results}
     except Exception as e:
         traceback.print_exc()
         return {"ok": False, "error": str(e), "used": None, "results": [], "summary": ""}
 
-# ===== صفحات عامة
+# ------------ pages ------------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -145,7 +133,6 @@ def home(request: Request):
 @app.get("/healthz")
 def health(): return {"ok": True}
 
-# ===== بحث نصي
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
     if not (q or "").strip():
@@ -154,11 +141,11 @@ async def search(request: Request, q: str = Form(...)):
     ua = request.headers.get("user-agent", "?")
     out = await smart_search(q)
     log_event("search", ip, ua, query=q, engine=out.get("used"))
-    ctx = {"request": request, "query": q, "summary": out.get("summary"), "engine_used": out.get("used"), "results": out.get("results")}
+    ctx = {"request": request, "query": q, "summary": out.get("summary"),
+           "engine_used": out.get("used"), "results": out.get("results")}
     if not out.get("ok"): ctx["error"] = f"حدث خطأ في البحث: {out.get('error')}"
     return templates.TemplateResponse("index.html", ctx)
 
-# ===== رفع صورة + روابط عدسات
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_image(request: Request, file: UploadFile = File(...)):
     try:
@@ -169,30 +156,30 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         filename = f"{uuid.uuid4().hex}.{ext}"
         path = os.path.join(UPLOADS_DIR, filename)
         with open(path, "wb") as f: f.write(await file.read())
+
         public_base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
-        img_url = f"{public_base}/uploads/{filename}"
-        google_lens = f"https://lens.google.com/uploadbyurl?url={img_url}"
-        bing_visual = f"https://www.bing.com/visualsearch?imgurl={img_url}"
+        img = f"{public_base}/uploads/{filename}"
+        links = {
+            "google_lens":   f"https://lens.google.com/uploadbyurl?url={img}",
+            "bing_visual":   f"https://www.bing.com/visualsearch?imgurl={img}",
+            "yandex_images": f"https://yandex.com/images/search?rpt=imageview&url={img}",
+            "tineye":        f"https://tineye.com/search?url={img}",
+        }
 
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
         log_event("image", ip, ua, file_name=filename)
 
-        return templates.TemplateResponse("index.html", {
-            "request": request, "uploaded_image": filename,
-            "google_lens": google_lens, "bing_visual": bing_visual,
-            "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇",
-        })
+        return templates.TemplateResponse("index.html", {"request": request, "uploaded_image": filename, **links,
+                                                         "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇"})
     except Exception as e:
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
-# ===== خدمة SW من الجذر
 @app.get("/sw.js")
 def sw_js():
     return FileResponse(os.path.join(STATIC_DIR, "pwa", "sw.js"), media_type="application/javascript")
 
-# ===== لوحة الإدارة
 def _admin_token() -> str:
     return hashlib.sha256((ADMIN_PASSWORD + "|" + ADMIN_SECRET).encode()).hexdigest()
 
