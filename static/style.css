@@ -25,3 +25,28 @@ button:hover{background:#6d28d9}
 .follow{margin-top:12px}
 .sources summary{cursor:pointer;margin-top:12px}
 #summaryBox{white-space:pre-wrap;line-height:1.9}
+/* صندوق الملخص – يبقى المحتوى داخله */
+.summary{
+  background:#0f1220;
+  border:1px solid #2a2f45;
+  border-radius:16px;
+  padding:14px;
+  max-height:220px;          /* ارتفاع ثابت */
+  overflow:auto;             /* تمرير داخلي */
+}
+.sumText{
+  white-space:pre-wrap;      /* لفّ الأسطر */
+  word-wrap:break-word;
+  line-height:1.7;
+}
+
+/* شبكة أزرار روابط الصور */
+.links.grid-2{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:10px;
+}
+@media (min-width: 640px){
+  .summary{ max-height:260px; }
+  .links.grid-2{ grid-template-columns: repeat(4, 1fr); }
+}
