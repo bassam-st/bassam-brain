@@ -1,46 +1,52 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>لوحة إدارة بسام</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/admin.css">
+  <style>
+    body{font-family:system-ui,Tahoma;background:#0b0f19;color:#eaeef8;margin:0;padding:16px}
+    .card{background:#121826;border:1px solid #2a2f45;border-radius:16px;padding:16px;max-width:1000px;margin:0 auto}
+    input,button{padding:10px 12px;border-radius:10px;border:1px solid #2a2f45;background:#0f1421;color:#fff}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{border-bottom:1px solid #1f2937;padding:8px;text-align:right;font-size:13px}
+    a{color:#c7d2fe}
+  </style>
 </head>
 <body>
-  <section class="card">
-    <h2>لوحة الإدارة</h2>
-
-    {% if login %}
-      <form action="/admin/login" method="post" style="max-width:420px">
-        {% if error %}<p class="err">{{ error }}</p>{% endif %}
-        <input type="password" name="password" placeholder="كلمة المرور" required/>
-        <button type="submit">دخول</button>
-      </form>
-      <p class="muted">اضبط المتغيرات في Render: <code>ADMIN_PASSWORD</code> و <code>ADMIN_SECRET</code>.</p>
-    {% else %}
-      <p><a class="btn btn-alt" href="/admin/export.csv">تنزيل CSV</a> • <a class="btn" href="/admin/logout">خروج</a></p>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr><th>ID</th><th>الوقت (UTC)</th><th>النوع</th><th>السؤال</th><th>الملف</th><th>المحرك</th><th>IP</th><th>UA</th></tr>
-          </thead>
-          <tbody>
-            {% for r in rows %}
-            <tr>
-              <td>{{ r.id }}</td>
-              <td>{{ r.ts }}</td>
-              <td>{{ r.type }}</td>
-              <td>{{ r.query }}</td>
-              <td>{{ r.file_name }}</td>
-              <td>{{ r.engine_used }}</td>
-              <td>{{ r.ip }}</td>
-              <td class="ua">{{ r.ua }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% endif %}
-  </section>
+  {% if login %}
+  <div class="card">
+    <h2>تسجيل الدخول</h2>
+    {% if error %}<p style="color:#ff6b6b">{{ error }}</p>{% endif %}
+    <form action="/admin/login" method="post">
+      <input type="password" name="password" placeholder="كلمة المرور" required>
+      <button type="submit">دخول</button>
+    </form>
+  </div>
+  {% else %}
+  <div class="card">
+    <h2>السجلات ({{ count }})</h2>
+    <div style="display:flex;gap:10px;margin:8px 0">
+      <a href="/admin/export.csv" class="btn">تصدير CSV</a>
+      <a href="/admin/logout" class="btn">خروج</a>
+    </div>
+    <table>
+      <thead><tr><th>التاريخ</th><th>النوع</th><th>المحرك</th><th>السؤال</th><th>الملف</th><th>IP</th><th>UA</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.ts }}</td>
+          <td>{{ r.type }}</td>
+          <td>{{ r.engine_used }}</td>
+          <td style="direction:ltr">{{ r.query }}</td>
+          <td>{{ r.file_name }}</td>
+          <td>{{ r.ip }}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.ua }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 </body>
 </html>
