@@ -1,16 +1,12 @@
 {
-  "name": "بسام الذكي — بحث عميق",
-  "short_name": "بسام الذكي",
-  "lang": "ar",
-  "dir": "rtl",
+  "name": "بسام الذكي",
+  "short_name": "Bassam AI",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
-  "theme_color": "#7c3aed",
   "background_color": "#0b0f19",
+  "theme_color": "#7c3aed",
   "icons": [
-    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
