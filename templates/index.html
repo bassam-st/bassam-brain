@@ -3,75 +3,83 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي – مساعدك في البحث والتلخيص</title>
-
-  <!-- Manifest و ألوان PWA -->
+  <title>بسام الذكي – بحث عميق</title>
   <link rel="manifest" href="/static/pwa/manifest.json">
   <meta name="theme-color" content="#0b0f19"/>
-
-  <!-- تنسيقات -->
   <link rel="stylesheet" href="/static/style.css"/>
-
-  <!-- أيقونة -->
-  <link rel="icon" href="/static/icons/icon-192.png" type="image/png"/>
-
-  <!-- OneSignal SDK -->
-  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-  <script>
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(function(OneSignal) {
-      OneSignal.init({
-        appId: "{{ onesignal_app_id }}",      // مُمرّر من الخادم
-        notifyButton: { enable: true },        // زر الإشعارات العائم
-        allowLocalhostAsSecureOrigin: true
-      });
-    });
-  </script>
 </head>
-
 <body>
-  <header class="top">
-    <img src="/static/icons/icon-192.png" alt="B" style="width:64px;height:64px;border-radius:16px;">
-    <h1>بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
-  </header>
+<header class="top">
+  <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
+  <div class="actions">
+    <button id="installBtn" hidden>تثبيت التطبيق</button>
+    <button id="themeBtn" title="الوضع الليلي/النهاري">🌙/☀️</button>
+  </div>
+</header>
 
-  <section class="card" style="text-align:center;">
-    <button id="notifyBtn" class="primary">🔔 تفعيل الإشعارات</button>
-    <p style="margin-top:8px;color:#aaa;">اضغط لتفعيل التنبيهات.</p>
-  </section>
+<section class="card">
+  <form id="searchForm" class="row">
+    <input id="q" placeholder="اكتب سؤالك…"/>
+    <label class="chk"><input type="checkbox" id="want_prices"/> روابط الأسعار</label>
+    <button>بحث</button>
+  </form>
 
-  <section class="card">
-    <form id="searchForm" class="row">
-      <input id="q" placeholder="اكتب سؤالك هنا..." autocomplete="off"/>
-      <button id="askBtn" type="submit">اسأل</button>
-      <label class="chk"><input type="checkbox" id="want_prices"/> روابط الأسعار</label>
-    </form>
-    <div id="answer" class="answer"></div>
-    <div id="sources" class="sources"></div>
-  </section>
+  <div id="answer" class="answer-box">…</div>
+  <div id="sources" class="sources"></div>
+</section>
 
-  <footer style="text-align:center;margin-top:32px;">
-    <p>© Bassam AI 2025 — <a href="/admin/health" target="_blank">حالة النظام</a> • <a href="/admin/push-test" target="_blank">اختبار إشعار</a></p>
-  </footer>
+<footer>
+  <p>© Bassam AI 2025 • <a href="/admin/health">حالة النظام</a></p>
+</footer>
 
-  <!-- كود JS الرئيسي (اختياري) -->
-  <script src="/static/app.js"></script>
+<script>
+async function postJSON(url, data){
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(data)
+  });
+  return r.json();
+}
 
-  <!-- تفعيل الإشعارات بزر المستخدم -->
-  <script>
-    document.getElementById('notifyBtn').addEventListener('click', async () => {
-      try {
-        const perm = await OneSignal.Notifications.requestPermission();
-        if (perm === 'granted') {
-          alert('✅ تم تفعيل الإشعارات بنجاح!');
-        } else {
-          alert('⚠️ لم يتم السماح بالإشعارات.');
-        }
-      } catch (e) {
-        console.error(e);
-        alert('حدث خطأ أثناء طلب الإذن.');
-      }
-    });
-  </script>
+function el(id){ return document.getElementById(id); }
+
+async function doSearch(e){
+  e.preventDefault();
+  el("answer").textContent = "… جاري البحث";
+  el("sources").innerHTML = "";
+  const q = el("q").value.trim();
+  const want_prices = el("want_prices").checked;
+  try{
+    const res = await postJSON("/search", { q, want_prices });
+    if(!res.ok){ throw new Error(res.error || "فشل البحث"); }
+    el("answer").textContent = res.answer || "لم أجد نتيجة";
+    if(res.sources?.length){
+      const srcs = res.sources.map(s=>`<li><a href="${s.url}" target="_blank">${s.title}</a></li>`).join("");
+      el("sources").innerHTML = `<h3>المصادر:</h3><ul>${srcs}</ul>`;
+    }
+  }catch(err){
+    el("answer").textContent = "حدث خطأ: " + err.message;
+  }
+}
+
+document.getElementById("searchForm").addEventListener("submit", doSearch);
+
+// زر التبديل بين الوضع الليلي والنهاري
+const themeBtn = document.getElementById("themeBtn");
+themeBtn.onclick = ()=>{
+  const dark = document.body.classList.toggle("dark");
+  localStorage.setItem("theme", dark ? "dark" : "light");
+};
+if(localStorage.getItem("theme")==="dark") document.body.classList.add("dark");
+
+// زر تثبيت التطبيق PWA
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  const installBtn = document.getElementById("installBtn");
+  installBtn.hidden = false;
+  installBtn.onclick = ()=> e.prompt();
+});
+</script>
 </body>
 </html>
