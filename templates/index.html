@@ -29,16 +29,16 @@
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- بطاقة إجابة الذكاء (تظهر عند استخدام /api/ask عبر JS) -->
+  <!-- بطاقة إجابة الذكاء (عبر /api/ask) -->
   <section class="card" id="aiCard" style="display:none">
-    <h3>إجابة الذكاء ({{ engine_used or 'GPT' }})</h3>
+    <h3>إجابة الذكاء</h3>
     <div id="aiAnswer" class="summary expanded"></div>
+    <div id="aiSources" class="results" style="margin-top:10px"></div>
   </section>
 
   {% if bullets %}
   <section class="card">
     <h3>ملخّص سريع</h3>
-
     <div class="summary collapsed" id="summaryBox">
       <ul class="sumText">
         {% for b in bullets %}
@@ -47,7 +47,6 @@
       </ul>
       <div class="summary-fade" aria-hidden="true"></div>
     </div>
-
     <div class="summary-actions">
       <button type="button" class="more-btn" id="toggleSummary">عرض المزيد</button>
     </div>
@@ -76,7 +75,6 @@
   {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
-
     <div class="results-container collapsed" id="resultsBox">
       <ul class="results" id="resultsList">
         {% for r in results %}
@@ -89,7 +87,6 @@
       </ul>
       <div class="summary-fade" aria-hidden="true"></div>
     </div>
-
     <div class="summary-actions">
       <button type="button" class="more-btn" id="toggleResults">عرض المزيد</button>
     </div>
@@ -99,6 +96,9 @@
   <footer class="footer">
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
+
+  <!-- زر تثبيت PWA -->
+  <button id="installBtn" class="install-btn" style="display:none">📱 تثبيت تطبيق بسام الذكي</button>
 
   <!-- جافاسكربت -->
   <script src="/static/app.js"></script>
