@@ -3,34 +3,60 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>فتح البث المباشر</title>
+  <title>افتح البث</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Tahoma,Arial;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#0b0f19;color:#fff}
-    .card{max-width:640px;background:#111827;border:1px solid #1f2937;border-radius:16px;padding:20px}
-    .btn{display:inline-block;margin:6px 4px;padding:12px 16px;border-radius:10px;background:#2563eb;color:#fff;text-decoration:none}
-    .sub{opacity:.8}
+    :root{--bg1:#0b1220;--bg2:#05070c;--glass:rgba(255,255,255,.08);--line:rgba(255,255,255,.12);--txt:#e5e7eb;--muted:#a1a1aa}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100dvh;background:
+      radial-gradient(1200px 600px at 20% -10%, #6b46ff22, transparent 60%),
+      radial-gradient(900px 500px at 110% 10%, #00d0ff22, transparent 65%),
+      linear-gradient(180deg,var(--bg1),var(--bg2));
+      color:var(--txt);font-family:Inter,system-ui,-apple-system,"Segoe UI",Tahoma}
+    .wrap{max-width:820px;margin:0 auto;padding:28px}
+    .glass{backdrop-filter: blur(8px); background:var(--glass); border:1px solid var(--line); border-radius:20px; padding:28px; box-shadow:0 20px 60px rgba(0,0,0,.35); margin-top:36px}
+    h1{margin:0 0 10px;font-size:26px}
+    .lead{margin:0 0 18px;color:var(--muted)}
+    .row{display:grid;grid-template-columns:1fr;gap:16px}
+    .card{border:1px solid var(--line); border-radius:16px; padding:16px}
+    .title{font-weight:800;font-size:18px;margin:2px 0}
+    .btn{display:block;text-align:center;padding:14px;border-radius:12px;font-weight:800;color:#0b1220;text-decoration:none;background:white}
+    .btn:hover{filter:brightness(1.05);transform:translateY(-2px);transition:.18s}
+    .yacine{background:linear-gradient(90deg,#fff,#e9ddff)}
+    .general{background:linear-gradient(90deg,#fff,#dff9ff)}
+    .muted{color:var(--muted);font-size:13px;margin-top:12px}
+    @media(min-width:720px){.row{grid-template-columns:1fr 1fr}}
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>جاري فتح القناة…</h2>
-    <p class="sub">المباراة: <b id="m">{{ mat or '' }}</b></p>
-    <div>
-      <a id="yacine" class="btn" href="#">افتح في ياسين</a>
-      <a id="general" class="btn" href="#">افتح في جنرال</a>
-      <a class="btn" href="{{ fallback }}">العودة للموقع</a>
+  <div class="wrap">
+    <div class="glass">
+      <h1>افتح البث للمباراة</h1>
+      <p class="lead">اختر التطبيق المفضّل لعرض المباراة فورًا</p>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="title">{{ mat or "Al Hilal vs Al Nassr" }}</div>
+        <div class="muted">الضغط على الزر يفتح التطبيق مباشرة إن كان مثبتًا</div>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="muted">تطبيق ياسين</div>
+          <a class="btn yacine"
+             href="intent://open#Intent;scheme={{ yacine_scheme or 'yacine' }};package={{ yacine_pkg or 'com.yacine.app' }};end">
+            فتح في Yacine
+          </a>
+        </div>
+        <div class="card">
+          <div class="muted">تطبيق جنرال</div>
+          <a class="btn general"
+             href="intent://open#Intent;scheme={{ general_scheme or 'general' }};package={{ general_pkg or 'com.general.live' }};end">
+            فتح في General
+          </a>
+        </div>
+      </div>
+
+      <p class="muted">لا يعمل؟ تأكد من تثبيت التطبيق أو جرّب الزر الآخر.</p>
     </div>
   </div>
-<script>
-(function(){
-  const q = new URLSearchParams(location.search);
-  const match = q.get('match') || '';
-  const yintent = "intent://open?match="+encodeURIComponent(match)+"#Intent;scheme={{ yacine_scheme }};package={{ yacine_pkg }};end";
-  const gintent = "intent://open?match="+encodeURIComponent(match)+"#Intent;scheme={{ general_scheme }};package={{ general_pkg }};end";
-  document.getElementById('yacine').href = yintent;
-  document.getElementById('general').href = gintent;
-  setTimeout(()=>{ window.location.href = yintent; }, 300);
-})();
-</script>
 </body>
 </html>
