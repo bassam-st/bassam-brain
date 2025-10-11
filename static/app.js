@@ -1,103 +1,143 @@
-// static/app.js — واجهة الرد الفوري + تحسينات بسيطة
-
-// SW + PWA
+// ====== PWA: Service Worker ======
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sw.js")
+    .then(() => console.log("SW ✅"))
+    .catch(err => console.error("SW ❌", err));
 }
 
-// تعامل مع إرسال النموذج: استخدم /api/ask إن أمكن، وإلا دع المتصفح يذهب لـ /search
-const form = document.getElementById("searchForm");
-const askBtn = document.getElementById("askBtn");
+// ====== PWA: Install Button ======
+let deferredPrompt;
+const installBtn = document.getElementById("installBtn");
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  installBtn.style.display = "block";
+});
+
+installBtn.addEventListener("click", async () => {
+  installBtn.style.display = "none";
+  if (!deferredPrompt) {
+    alert("التثبيت غير مدعوم على هذا المتصفح.");
+    return;
+  }
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt = null;
+});
+
+// iOS hint (Safari doesn’t support beforeinstallprompt)
+(function () {
+  const ua = navigator.userAgent.toLowerCase();
+  const isiOS = /iphone|ipad|ipod/.test(ua);
+  const inStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+  if (isiOS && !inStandalone) {
+    installBtn.style.display = "block";
+    installBtn.textContent = "📱 تثبيت على الشاشة الرئيسية (iOS)";
+    installBtn.onclick = () => {
+      alert("على iPhone/iPad: افتح زر المشاركة في Safari → Add to Home Screen → Add");
+    };
+  }
+})();
+
+// ====== UI: expand/collapse for summary/results ======
+(function () {
+  const sumBox = document.getElementById("summaryBox");
+  const sumBtn = document.getElementById("toggleSummary");
+  if (sumBox && sumBtn) {
+    sumBtn.addEventListener("click", () => {
+      const expanded = sumBox.classList.toggle("expanded");
+      sumBox.classList.toggle("collapsed", !expanded);
+      sumBtn.textContent = expanded ? "إخفاء" : "عرض المزيد";
+    });
+  }
+})();
+(function () {
+  const resBox = document.getElementById("resultsBox");
+  const resBtn = document.getElementById("toggleResults");
+  if (resBox && resBtn) {
+    resBtn.addEventListener("click", () => {
+      const expanded = resBox.classList.toggle("expanded");
+      resBox.classList.toggle("collapsed", !expanded);
+      resBtn.textContent = expanded ? "إخفاء" : "عرض المزيد";
+    });
+  }
+})();
+
+// ====== AI Ask via /api/ask (بدون تغيير الشكل العام) ======
 const qInput = document.getElementById("q");
-const aiCard = document.getElementById("aiCard");
-const aiAnswer = document.getElementById("aiAnswer");
+const askBtn  = document.getElementById("askBtn");
+const aiCard  = document.getElementById("aiCard");
+const aiAnswer= document.getElementById("aiAnswer");
+const aiSources = document.getElementById("aiSources");
+const form = document.getElementById("searchForm");
 
-if (form && askBtn && qInput) {
-  form.addEventListener("submit", async (e) => {
-    // جرّب الطلب عبر API أولًا (AJAX)
-    e.preventDefault();
+// إذا أراد المستخدم إرسال السؤال إلى الذكاء بدل /search (نفعّل هنا)
+form.addEventListener("submit", async (e) => {
+  // نرسل للسيرفرين؟ اختر: الذكاء فقط أو كلاهما.
+  // هنا نجعلها الذكاء أولا (يمكنك حذف هذا المانع لو تريد سلوك /search التقليدي)
+  e.preventDefault();
+  const q = (qInput.value || "").trim();
+  if (!q) return;
 
-    const q = qInput.value.trim();
-    if (!q) return;
+  aiCard.style.display = "block";
+  aiAnswer.innerHTML = `<div class="ok">⏳ جاري توليد الإجابة...</div>`;
+  aiSources.innerHTML = "";
 
-    askBtn.disabled = true;
-    askBtn.textContent = "جاري الإجابة...";
+  try {
+    const resp = await fetch("/api/ask", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ q })
+    });
+    const data = await resp.json();
 
-    try {
-      const r = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q })
-      });
-
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      const data = await r.json();
-
-      if (data.ok) {
-        // اعرض الإجابة
-        aiCard.style.display = "block";
-        aiAnswer.innerHTML = `
-          <div class="results">
-            <p style="white-space:pre-wrap;line-height:1.9">${escapeHtml(data.answer || "")}</p>
-            ${renderBullets(data.bullets)}
-            ${renderSources(data.sources)}
-          </div>
-        `;
-        window.scrollTo({ top: aiCard.offsetTop - 20, behavior: "smooth" });
-      } else {
-        // fallback للبحث العادي
-        form.submit();
-      }
-    } catch (err) {
-      // fallback للبحث العادي عند أي خطأ
-      form.submit();
-    } finally {
-      askBtn.disabled = false;
-      askBtn.textContent = "اسأل";
+    if (!data.ok) {
+      aiAnswer.innerHTML = `<div class="err">⚠️ تعذر توليد الإجابة: ${data.error || "مشكلة غير معروفة"}</div>`;
+      return;
     }
-  });
-}
 
-// أزرار "عرض المزيد" للملخص والنتائج (fallback)
-(function () {
-  const box = document.getElementById('summaryBox');
-  const btn = document.getElementById('toggleSummary');
-  if (box && btn) {
-    btn.addEventListener('click', () => {
-      const expanded = box.classList.toggle('expanded');
-      box.classList.toggle('collapsed', !expanded);
-      btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
-    });
-  }
-})();
-(function () {
-  const box = document.getElementById('resultsBox');
-  const btn = document.getElementById('toggleResults');
-  if (box && btn) {
-    btn.addEventListener('click', () => {
-      const expanded = box.classList.toggle('expanded');
-      box.classList.toggle('collapsed', !expanded);
-      btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
-    });
-  }
-})();
+    // نص الإجابة
+    aiAnswer.innerHTML = "";
+    const p = document.createElement("div");
+    p.style.whiteSpace = "pre-wrap";
+    p.textContent = data.answer || "";
+    aiAnswer.appendChild(p);
 
-function renderBullets(bullets) {
-  if (!bullets || !bullets.length) return "";
-  const items = bullets.map(b => `<li>${escapeHtml(b)}</li>`).join("");
-  return `<h4>نِقَاط موجزة</h4><ul class="sumText">${items}</ul>`;
-}
-function renderSources(srcs) {
-  if (!srcs || !srcs.length) return "";
-  const lis = srcs.map(s => `
-    <li>
-      <a href="${s.link}" target="_blank">${escapeHtml(s.title || s.link || "مصدر")}</a>
-      <small>${escapeHtml(s.snippet || "")}</small>
-      <em>${escapeHtml(s.source || "")}</em>
-    </li>
-  `).join("");
-  return `<h4 style="margin-top:12px">المصادر</h4><ul class="results">${lis}</ul>`;
-}
-function escapeHtml(t) {
-  return (t || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
+    // نقاط الملخص (اختياري)
+    if (Array.isArray(data.bullets) && data.bullets.length) {
+      const ul = document.createElement("ul");
+      ul.className = "sumText";
+      data.bullets.forEach(b => {
+        const li = document.createElement("li");
+        li.textContent = b;
+        ul.appendChild(li);
+      });
+      aiAnswer.appendChild(ul);
+    }
+
+    // المصادر (روابط)
+    if (Array.isArray(data.sources) && data.sources.length) {
+      const list = document.createElement("ul");
+      list.className = "results";
+      data.sources.forEach(s => {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = s.link;
+        a.target = "_blank";
+        a.textContent = s.title || s.link;
+        const sm = document.createElement("small");
+        sm.textContent = s.snippet || "";
+        li.appendChild(a);
+        li.appendChild(document.createElement("br"));
+        li.appendChild(sm);
+        list.appendChild(li);
+      });
+      aiSources.innerHTML = "<h4>المصادر:</h4>";
+      aiSources.appendChild(list);
+    }
+  } catch (err) {
+    aiAnswer.innerHTML = `<div class="err">⚠️ خطأ في الاتصال بالخادم.</div>`;
+    console.error(err);
+  }
+});
