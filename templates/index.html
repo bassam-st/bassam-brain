@@ -23,25 +23,24 @@
 
   <section class="card">
     <form id="searchForm" action="/search" method="post" class="row">
-      <input type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
-      <button type="submit">بحث</button>
+      <input type="text" name="q" id="q" placeholder="اكتب سؤالك هنا..." required/>
+      <button type="submit">بحث (سريع)</button>
     </form>
+    <div class="row" style="margin-top:8px">
+      <input type="file" id="imgPick" accept="image/*" hidden>
+      <button id="imgBtn" type="button" class="btn">📷 أدرج نصًا من صورة (OCR)</button>
+    </div>
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
   {% if bullets %}
   <section class="card">
     <h3>ملخّص سريع</h3>
-
     <div class="summary collapsed" id="summaryBox">
       <ul class="sumText">
-        {% for b in bullets %}
-        <li>{{ b }}</li>
-        {% endfor %}
-      </ul>
-      <div class="summary-fade" aria-hidden="true"></div>
+        {% for b in bullets %}<li>{{ b }}</li>{% endfor %}
+      </ul><div class="summary-fade" aria-hidden="true"></div>
     </div>
-
     <div class="summary-actions">
       <button type="button" class="more-btn" id="toggleSummary">عرض المزيد</button>
     </div>
@@ -49,7 +48,7 @@
   {% endif %}
 
   <section class="card">
-    <h3>بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
+    <h3>بحث بالصورة (Google Lens / Bing Visual)</h3>
     <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data" class="row">
       <input type="file" name="file" accept="image/*" required/>
       <button type="submit">ارفع الصورة وابحث</button>
@@ -70,7 +69,6 @@
   {% if results %}
   <section class="card">
     <h3>نتائج البحث ({{ engine_used }})</h3>
-
     <div class="results-container collapsed" id="resultsBox">
       <ul class="results">
         {% for r in results %}
@@ -83,67 +81,19 @@
       </ul>
       <div class="summary-fade" aria-hidden="true"></div>
     </div>
-
     <div class="summary-actions">
       <button type="button" class="more-btn" id="toggleResults">عرض المزيد</button>
     </div>
   </section>
   {% endif %}
 
+  <!-- بطاقة إجابة الذكاء تُنشأ من app.js تلقائيًا عند أول سؤال -->
   <footer class="footer">
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <script>
-    // زر تثبيت
-    let deferredPrompt;
-    window.addEventListener("beforeinstallprompt", (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      const btn = document.createElement("button");
-      btn.textContent = "📱 تثبيت تطبيق بسام الذكي";
-      btn.className = "install-btn";
-      document.body.appendChild(btn);
-      btn.addEventListener("click", async () => {
-        btn.style.display = "none";
-        deferredPrompt.prompt();
-        await deferredPrompt.userChoice;
-        deferredPrompt = null;
-      });
-    });
-
-    // Service Worker
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js")
-        .then(() => console.log("SW ✅"))
-        .catch(err => console.error("SW ❌", err));
-    }
-
-    // عرض المزيد للملخّص
-    (function () {
-      const box = document.getElementById('summaryBox');
-      const btn = document.getElementById('toggleSummary');
-      if (box && btn) {
-        btn.addEventListener('click', () => {
-          const expanded = box.classList.toggle('expanded');
-          box.classList.toggle('collapsed', !expanded);
-          btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
-        });
-      }
-    })();
-
-    // عرض المزيد للمصادر
-    (function () {
-      const box = document.getElementById('resultsBox');
-      const btn = document.getElementById('toggleResults');
-      if (box && btn) {
-        btn.addEventListener('click', () => {
-          const expanded = box.classList.toggle('expanded');
-          box.classList.toggle('collapsed', !expanded);
-          btn.textContent = expanded ? 'إخفاء' : 'عرض المزيد';
-        });
-      }
-    })();
-  </script>
+  <!-- تيسراكت للـ OCR داخل المتصفح -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>
