@@ -24,6 +24,7 @@
     .yacine{background:linear-gradient(90deg,#fff,#e9ddff)}
     .general{background:linear-gradient(90deg,#fff,#dff9ff)}
     .muted{color:var(--muted);font-size:13px;margin-top:12px}
+    .hidden{display:none}
     @media(min-width:720px){.row{grid-template-columns:1fr 1fr}}
   </style>
 </head>
@@ -31,14 +32,15 @@
   <div class="wrap">
     <div class="glass">
       <h1>افتح البث للمباراة</h1>
-      <p class="lead">اختر التطبيق المفضّل لعرض المباراة فورًا</p>
+      <p class="lead">سيتم فتح <b>Yacine</b> تلقائيًا… وإن لم يفتح ستظهر الأزرار بالأسفل.</p>
 
       <div class="card" style="margin-bottom:16px">
         <div class="title">{{ mat or "Al Hilal vs Al Nassr" }}</div>
-        <div class="muted">الضغط على الزر يفتح التطبيق مباشرة إن كان مثبتًا</div>
+        <div class="muted">إذا لم يتم الفتح التلقائي خلال ثانيتين، استخدم أحد الزرين.</div>
       </div>
 
-      <div class="row">
+      <!-- أزرار fallback -->
+      <div id="fallback" class="row hidden">
         <div class="card">
           <div class="muted">تطبيق ياسين</div>
           <a class="btn yacine"
@@ -55,8 +57,32 @@
         </div>
       </div>
 
-      <p class="muted">لا يعمل؟ تأكد من تثبيت التطبيق أو جرّب الزر الآخر.</p>
+      <p class="muted">لا يعمل؟ تأكد من تثبيت التطبيق المطلوب أو جرّب الزر الآخر.</p>
     </div>
   </div>
+
+  <script>
+    (function () {
+      // نبني رابط intent لفتح Yacine تلقائيًا
+      var scheme = "{{ yacine_scheme or 'yacine' }}";
+      var pkg = "{{ yacine_pkg or 'com.yacine.app' }}";
+      var intentUrl = "intent://open#Intent;scheme=" + scheme + ";package=" + pkg + ";end";
+
+      // نحاول الفتح مباشرة بعد التحميل
+      var opened = false;
+      try {
+        window.location.href = intentUrl;
+        opened = true; // بعض المتصفحات لا تُعيد حالة مؤكدة، لذا سنعرض fallback بعد مهلة.
+      } catch (e) {
+        opened = false;
+      }
+
+      // إن لم يفتح خلال ~1500ms نظهر الأزرار كـ fallback
+      setTimeout(function () {
+        var fb = document.getElementById('fallback');
+        if (fb) fb.classList.remove('hidden');
+      }, 1500);
+    })();
+  </script>
 </body>
 </html>
