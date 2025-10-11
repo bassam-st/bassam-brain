@@ -1,10 +1,16 @@
-# main.py — Bassam Brain (FastAPI) + بحث + رفع صور + GPT API + إشعارات مباريات OneSignal + Deeplink
-import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, datetime as dt
+# main.py — Bassam Brain (FastAPI) + بحث + رفع صور + GPT API
+# + إشعارات مباريات OneSignal مجدولة + Deeplink ياسين/جنرال + لوحة إدارة
+
+import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
+import datetime as dt
 from typing import Optional, List, Dict
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, JSONResponse, Response
+from fastapi.responses import (
+    HTMLResponse, RedirectResponse, FileResponse,
+    StreamingResponse, JSONResponse
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -44,13 +50,22 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# إشعارات OneSignal + الدوريات + التوقيت
+# ----------------------------- OneSignal + الدوريات + التوقيت + باكدجات
 ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
 ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
-TIMEZONE = os.getenv("TIMEZONE", "Asia/Qatar").strip()
-LEAGUE_IDS = [x.strip() for x in os.getenv("LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790").split(",") if x.strip()]
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()  # ← توقيت مكة المكرمة
 TZ = ZoneInfo(TIMEZONE)
+
+LEAGUE_IDS = [x.strip() for x in os.getenv(
+    "LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790"
+).split(",") if x.strip()]
+
+YACINE_PACKAGE = os.getenv("YACINE_PACKAGE", "com.yacine.app").strip()
+GENERAL_PACKAGE = os.getenv("GENERAL_PACKAGE", "com.general.live").strip()
+YACINE_SCHEME = os.getenv("YACINE_SCHEME", "yacine").strip()
+GENERAL_SCHEME = os.getenv("GENERAL_SCHEME", "general").strip()
 
 # أسماء الدوريات حسب TheSportsDB
 LEAGUE_NAME_BY_ID = {
@@ -62,8 +77,6 @@ LEAGUE_NAME_BY_ID = {
     "4480": "Saudi Pro League",
     "4790": "UEFA Champions League",
 }
-
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ============================== قاعدة البيانات
 def db() -> sqlite3.Connection:
@@ -108,38 +121,31 @@ SENSITIVE_PRIVACY_ANSWER = (
 
 def normalize_ar(text: str) -> str:
     t = (text or "").strip().lower()
-    t = re.sub(r"[ًٌٍَُِّْ]", "", t)  # إزالة التشكيل
+    t = re.sub(r"[ًٌٍَُِّْ]", "", t)
     t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا")
     t = t.replace("ى","ي").replace("ة","ه")
     return t
 
-INTRO_PATTERNS = [
-    r"من انت", r"من أنت", r"مين انت", r"من تكون", r"من هو المساعد", r"تعرف بنفسك", r"عرف بنفسك"
-]
+INTRO_PATTERNS = [r"من انت", r"من أنت", r"مين انت", r"من تكون", r"من هو المساعد", r"تعرف بنفسك", r"عرف بنفسك"]
 BASSAM_PATTERNS = [
     r"من هو بسام", r"مين بسام", r"من هو بسام الذكي", r"من هو بسام الشتيمي",
     r"من صنع التطبيق", r"من هو صانع التطبيق", r"من المطور", r"من هو صاحب التطبيق",
     r"من مطور التطبيق", r"من برمج التطبيق", r"من انشأ التطبيق", r"مين المطور"
 ]
 SENSITIVE_PATTERNS = [
-    r"اسم\s+زوج(ة|ه)?\s+بسام", r"زوج(ة|ه)\s+بسام", r"مرت\s+بسام",
-    r"اسم\s+ام\s+بسام", r"اسم\s+والدة\s+بسام", r"ام\s+بسام", r"والدة\s+بسام",
-    r"اسم\s+زوجة", r"اسم\s+ام", r"من هي زوجة", r"من هي ام"
+    r"اسم\s+زوج(ة|ه)?\s*بسام", r"زوج(ة|ه)\s*بسام", r"مرت\s*بسام",
+    r"اسم\s*ام\s*بسام", r"اسم\s*والدة\s*بسام", r"ام\s*بسام", r"والدة\s*بسام",
+    r"اسم\s*زوجة", r"اسم\s*ام", r"من هي زوجة", r"من هي ام"
 ]
 
 def is_intro_query(user_text: str) -> bool:
-    q = normalize_ar(user_text)
-    return any(re.search(p, q) for p in INTRO_PATTERNS)
-
+    q = normalize_ar(user_text);  return any(re.search(p, q) for p in INTRO_PATTERNS)
 def is_bassam_query(user_text: str) -> bool:
-    q = normalize_ar(user_text)
-    return any(re.search(p, q) for p in BASSAM_PATTERNS)
-
+    q = normalize_ar(user_text);  return any(re.search(p, q) for p in BASSAM_PATTERNS)
 def is_sensitive_personal_query(user_text: str) -> bool:
-    q = normalize_ar(user_text)
-    return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
+    q = normalize_ar(user_text);  return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
 
-# ============================== ذكاء التلخيص الخفيف (داخل الصندوق)
+# ============================== تلخيص بسيط
 def _clean(txt: str) -> str:
     txt = (txt or "").strip()
     return re.sub(r"[^\w\s\u0600-\u06FF]", " ", txt)
@@ -153,10 +159,8 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(p.split()) >= 4:
             key = p[:80]
             if key not in seen:
-                seen.add(key)
-                cleaned.append(p)
-        if len(cleaned) >= max_items:
-            break
+                seen.add(key); cleaned.append(p)
+        if len(cleaned) >= max_items: break
     return cleaned
 
 # ============================== البحث (Serper ثم DuckDuckGo)
@@ -168,30 +172,21 @@ async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     payload = {"q": q, "num": num, "hl": "ar"}
     async with httpx.AsyncClient(timeout=25) as client_httpx:
         r = await client_httpx.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
+        r.raise_for_status(); data = r.json()
     out = []
     for it in (data.get("organic", []) or [])[:num]:
-        out.append({
-            "title": it.get("title"),
-            "link": it.get("link"),
-            "snippet": it.get("snippet"),
-            "source": "Google",
-        })
+        out.append({"title": it.get("title"), "link": it.get("link"),
+                    "snippet": it.get("snippet"), "source": "Google"})
     return out
 
 def search_duckduckgo(q: str, num: int = 6) -> List[Dict]:
     out = []
     with DDGS() as ddgs:
         for r in ddgs.text(q, region="xa-ar", safesearch="moderate", max_results=num):
-            out.append({
-                "title": r.get("title"),
-                "link": r.get("href") or r.get("url"),
-                "snippet": r.get("body"),
-                "source": "DuckDuckGo",
-            })
-            if len(out) >= num:
-                break
+            out.append({"title": r.get("title"),
+                        "link": r.get("href") or r.get("url"),
+                        "snippet": r.get("body"), "source": "DuckDuckGo"})
+            if len(out) >= num: break
     return out
 
 async def smart_search(q: str, num: int = 6) -> Dict:
@@ -200,19 +195,15 @@ async def smart_search(q: str, num: int = 6) -> Dict:
         used, results = None, []
         if SERPER_API_KEY:
             try:
-                results = await search_google_serper(q, num)
-                used = "Google"
+                results = await search_google_serper(q, num); used = "Google"
             except Exception:
-                results = search_duckduckgo(q, num)
-                used = "DuckDuckGo"
+                results = search_duckduckgo(q, num); used = "DuckDuckGo"
         else:
-            results = search_duckduckgo(q, num)
-            used = "DuckDuckGo"
+            results = search_duckduckgo(q, num); used = "DuckDuckGo"
         bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
         return {"ok": True, "used": used, "bullets": bullets, "results": results}
     except Exception as e:
-        traceback.print_exc()
-        return {"ok": False, "used": None, "results": [], "error": str(e)}
+        traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
 
 # ============================== صفحات HTML
 @app.get("/", response_class=HTMLResponse)
@@ -223,14 +214,14 @@ def home(request: Request):
 def health():
     return {"ok": True}
 
-# ============================== بحث نصي (fallback سيرفر)
+# ============================== بحث نصي
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
     q = (q or "").strip()
     if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
-    # ✅ تعريف المساعد
+    # تعريف المساعد
     if is_intro_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
@@ -238,7 +229,6 @@ async def search(request: Request, q: str = Form(...)):
         ctx = {"request": request, "query": q, "engine_used": "CANNED_INTRO", "results": [], "bullets": [INTRO_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    # ✅ من هو بسام؟
     if is_bassam_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
@@ -246,7 +236,6 @@ async def search(request: Request, q: str = Form(...)):
         ctx = {"request": request, "query": q, "engine_used": "CANNED", "results": [], "bullets": [CANNED_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    # ✅ خصوصية
     if is_sensitive_personal_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
@@ -259,12 +248,10 @@ async def search(request: Request, q: str = Form(...)):
     ua = request.headers.get("user-agent", "?")
     log_event("search", ip, ua, query=q, engine_used=result.get("used"))
 
-    ctx = {
-        "request": request, "query": q,
-        "engine_used": result.get("used"),
-        "results": result.get("results", []),
-        "bullets": result.get("bullets", []),
-    }
+    ctx = {"request": request, "query": q,
+           "engine_used": result.get("used"),
+           "results": result.get("results", []),
+           "bullets": result.get("bullets", [])}
     if not result.get("ok"):
         ctx["error"] = f"⚠️ حدث خطأ في البحث: {result.get('error')}"
     return templates.TemplateResponse("index.html", ctx)
@@ -277,12 +264,10 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
             return templates.TemplateResponse("index.html", {"request": request, "error": "لم يتم اختيار صورة."})
 
         ext = (file.filename.split(".")[-1] or "jpg").lower()
-        if ext not in ["jpg", "jpeg", "png", "webp", "gif"]:
-            ext = "jpg"
+        if ext not in ["jpg", "jpeg", "png", "webp", "gif"]: ext = "jpg"
         filename = f"{uuid.uuid4().hex}.{ext}"
         save_path = os.path.join(UPLOADS_DIR, filename)
-        with open(save_path, "wb") as f:
-            f.write(await file.read())
+        with open(save_path, "wb") as f:  f.write(await file.read())
 
         public_base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
         image_url = f"{public_base}/uploads/{filename}"
@@ -306,17 +291,12 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 # ============================== API: ردّ الذكاء باستخدام GPT (اختياري)
 @app.post("/api/ask")
 async def api_ask(request: Request):
-    """
-    يستقبل JSON: {"q": "سؤال"}
-    يعيد: { ok, answer, bullets, sources, engine_used }
-    """
     try:
         data = await request.json()
         q = (data.get("q") or "").strip()
         if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
-        # ✅ تعريف المساعد
         if is_intro_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
@@ -326,7 +306,6 @@ async def api_ask(request: Request):
                                  "bullets": make_bullets([INTRO_ANSWER], max_items=3),
                                  "sources": []})
 
-        # ✅ من هو بسام؟
         if is_bassam_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
@@ -336,7 +315,6 @@ async def api_ask(request: Request):
                                  "bullets": make_bullets([CANNED_ANSWER], max_items=4),
                                  "sources": []})
 
-        # ✅ خصوصية
         if is_sensitive_personal_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
@@ -346,7 +324,6 @@ async def api_ask(request: Request):
                                  "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
                                  "sources": []})
 
-        # بحث سريع لتجميع سياق + مصادر
         search = await smart_search(q, num=6)
         sources = search.get("results", [])
         context_lines = []
@@ -356,30 +333,22 @@ async def api_ask(request: Request):
             snippet = (r.get("snippet") or "").strip()
             context_lines.append(f"{i}. {title}\n{snippet}\n{link}")
 
-        # إذا لا يوجد مفتاح OpenAI نرجّع ملخّص البحث فقط
         if not client:
             return JSONResponse({
-                "ok": True,
-                "engine_used": search.get("used"),
+                "ok": True, "engine_used": search.get("used"),
                 "answer": "⚠️ لم يتم إعداد مفتاح OpenAI، لذا أعرض لك ملخّصًا من النتائج فقط.",
-                "bullets": search.get("bullets", []),
-                "sources": sources
+                "bullets": search.get("bullets", []), "sources": sources
             })
 
-        # رسالة إلى النموذج
-        system_msg = (
-            "أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-            "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
-            "إن لم تكن واثقًا قل لا أعلم."
-        )
+        system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
+                      "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
         user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
 
         resp = client.chat.completions.create(
             model=LLM_MODEL or "gpt-5-mini",
             messages=[{"role": "system", "content": system_msg},
                       {"role": "user", "content": user_msg}],
-            temperature=0.3,
-            max_tokens=600,
+            temperature=0.3, max_tokens=600,
         )
         answer = (resp.choices[0].message.content or "").strip()
         bullets = make_bullets([answer], max_items=8)
@@ -391,8 +360,7 @@ async def api_ask(request: Request):
         return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
                              "answer": answer, "bullets": bullets, "sources": sources})
     except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        traceback.print_exc();  return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 # ============================== Service Worker على الجذر
 @app.get("/sw.js")
@@ -403,19 +371,20 @@ def sw_js():
 # ============================== Deeplink (فتح البث في ياسين/جنرال)
 @app.get("/deeplink", response_class=HTMLResponse)
 def deeplink(request: Request, match: Optional[str] = None):
-    """يستقبل ?match=TeamA%20vs%20TeamB ويعرض روابط فتح ياسين/جنرال"""
-    ctx = {"request": request, "mat": (match or "").strip()}
-    # حاول استخدام القالب إن وُجد، وإلا اعرض HTML مبسط
+    ctx = {"request": request, "mat": (match or "").strip(),
+           "yacine_pkg": YACINE_PACKAGE, "general_pkg": GENERAL_PACKAGE,
+           "yacine_scheme": YACINE_SCHEME, "general_scheme": GENERAL_SCHEME}
     tpl_path = os.path.join(TEMPLATES_DIR, "deeplink.html")
     if os.path.exists(tpl_path):
         return templates.TemplateResponse("deeplink.html", ctx)
+    # نسخة مبسطة إذا لم يوجد قالب
     html = f"""
     <!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"/>
     <body style="text-align:center;padding-top:60px;font-family:sans-serif;background:#0b0f19;color:#fff">
-      <h2>جاري فتح القناة...</h2>
+      <h2>جاري فتح القناة…</h2>
       <p>{ctx['mat']}</p>
-      <p><a style="color:#7cf" href="intent://open#Intent;scheme=yacine;package=com.yacine.app;end">افتح في ياسين</a></p>
-      <p><a style="color:#7cf" href="intent://open#Intent;scheme=general;package=com.general.live;end">افتح في جنرال</a></p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme={YACINE_SCHEME};package={YACINE_PACKAGE};end">افتح في ياسين</a></p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme={GENERAL_SCHEME};package={GENERAL_PACKAGE};end">افتح في جنرال</a></p>
     </body></html>
     """
     return HTMLResponse(html)
@@ -424,6 +393,7 @@ def deeplink(request: Request, match: Optional[str] = None):
 def make_token(password: str) -> str:
     return hashlib.sha256((password + "|" + ADMIN_SECRET).encode("utf-8")).hexdigest()
 ADMIN_TOKEN = make_token(ADMIN_PASSWORD)
+
 def is_admin(request: Request) -> bool:
     return request.cookies.get("bb_admin") == ADMIN_TOKEN
 
@@ -467,24 +437,25 @@ def admin_export(request: Request):
     return StreamingResponse(iter([output.read()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
 
-# ============================== مباريات اليوم + إشعارات OneSignal
+# ============================== مباريات اليوم + إشعارات OneSignal (نهائي)
 def _to_local(date_str: str, time_str: str) -> dt.datetime:
     """يبني datetime من تاريخ/وقت API ويحوّله لمنطقة TIMEZONE"""
     t = (time_str or "00:00:00").split("+")[0]
-    # نحاول اعتبار الوقت بتوقيت UTC (كما تُرجعه بعض واجهات TheSportsDB)
-    utc_naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
-    if utc_naive.tzinfo is None:
-        utc_naive = utc_naive.replace(tzinfo=dt.timezone.utc)
-    return utc_naive.astimezone(TZ)
+    naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
+    if naive.tzinfo is None:
+        naive = naive.replace(tzinfo=dt.timezone.utc)
+    return naive.astimezone(TZ)
 
-def fetch_today_matches():
+def fetch_today_matches() -> List[Dict]:
+    """يسحب مباريات اليوم للدوريات المحددة"""
     today = dt.date.today()
     s_today = today.strftime("%Y-%m-%d")
     matches: List[Dict] = []
     with httpx.Client(timeout=20) as client:
         for lid in LEAGUE_IDS:
             lname = LEAGUE_NAME_BY_ID.get(lid)
-            if not lname: continue
+            if not lname:
+                continue
             url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={s_today}&l={quote(lname)}"
             try:
                 data = client.get(url).json()
@@ -492,7 +463,7 @@ def fetch_today_matches():
                 continue
             for e in (data or {}).get("events", []) or []:
                 home, away = e.get("strHomeTeam"), e.get("strAwayTeam")
-                if not (home and away): 
+                if not (home and away):
                     continue
                 kickoff = _to_local(e.get("dateEvent"), e.get("strTime") or "00:00:00")
                 matches.append({
@@ -506,61 +477,63 @@ def fetch_today_matches():
     matches.sort(key=lambda x: x["kickoff"])
     return matches
 
-def send_push(title: str, body: str, url_path: str = "/"):
+def send_push(title: str, body: str, url_path: str = "/") -> bool:
+    """إرسال إشعار OneSignal لجميع المشتركين — (Bearer v2)"""
     if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY):
-        return False, "OneSignal not configured"
-    url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
+        return False
+    full_url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
     payload = {
         "app_id": ONESIGNAL_APP_ID,
         "included_segments": ["Subscribed Users"],
-        "headings": {"ar": title},
-        "contents": {"ar": body},
-        "url": url
+        "headings": {"ar": title, "en": title},
+        "contents": {"ar": body, "en": body},
+        "url": full_url,
     }
-    headers = {"Authorization": f"Basic {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json; charset=utf-8"}
     try:
         with httpx.Client(timeout=20) as client:
             r = client.post("https://api.onesignal.com/notifications", headers=headers, json=payload)
-        ok = r.status_code in (200, 201)
-        return ok, r.text
-    except Exception as e:
-        return False, str(e)
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
 
 def job_morning_digest():
+    """ملخص مباريات اليوم — الساعة 09:00 حسب TIMEZONE"""
     matches = fetch_today_matches()
-    if not matches: 
+    if not matches:
         return
     lines = [f"{m['kickoff'].strftime('%H:%M')} - {m['home']} × {m['away']} ({m['league']})" for m in matches]
     title = f"مباريات اليوم {dt.date.today().strftime('%Y-%m-%d')}"
     body = "\n".join(lines[:10])
-    ok, _ = send_push(title, body)
+    ok = send_push(title, body, "/deeplink")
     try:
         log_event("push", "server", "scheduler", query=title, engine_used=f"morning:{'ok' if ok else 'fail'}")
-    except: pass
+    except:
+        pass
 
 def job_half_hour_and_kickoff():
+    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية"""
     matches = fetch_today_matches()
-    if not matches: 
+    if not matches:
         return
     now = dt.datetime.now(TZ)
     for m in matches:
         mins = int((m["kickoff"] - now).total_seconds() // 60)
         if 25 <= mins <= 35:
-            send_push(f"📢 بعد 30 دقيقة: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"⏰ بعد 30 دقيقة: {m['home']} × {m['away']}",
+                      f"البطولة: {m['league']}", m["click_url"])
         if -2 <= mins <= 2:
-            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}",
+                      f"البطولة: {m['league']}", m["click_url"])
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    # ملخص صباحي 9:00
     sch.add_job(job_morning_digest, CronTrigger(hour=9, minute=0, timezone=TIMEZONE))
-    # فحص كل 5 دقائق للـ -30 دقيقة وبدء المباراة
     sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
     sch.start()
 
 @app.on_event("startup")
 def _on_startup():
-    # ابدأ الجدولة عند تشغيل السيرفر
     try:
         start_scheduler()
     except Exception:
