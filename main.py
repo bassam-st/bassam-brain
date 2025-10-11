@@ -1,4 +1,4 @@
-# main.py — Bassam Brain (إصدار GPT-5 mini + واجهة /api/ask) + رد ثابت وخصوصية محسّنة
+# main.py — Bassam Brain (GPT-5 mini /api/ask) + ردود ثابتة (من أنت؟/من هو بسام؟) + خصوصية
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 import httpx
 from duckduckgo_search import DDGS
 
-# OpenAI
+# OpenAI (اختياري)
 from openai import OpenAI
 
 # ----------------------------- مسارات
@@ -40,10 +40,7 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
 
-if OPENAI_API_KEY:
-    client = OpenAI(api_key=OPENAI_API_KEY)
-else:
-    client = None
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ============================== قاعدة البيانات
 def db() -> sqlite3.Connection:
@@ -77,9 +74,9 @@ def log_event(event_type: str, ip: str, ua: str, query: Optional[str]=None,
             (datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua)
         )
 
-# ============================== رد ثابت لسؤال "من هو بسام؟" والخصوصية
+# ============================== ردود ثابتة + خصوصية
 CANNED_ANSWER = "بسام الشتيمي هو منصوريّ الأصل، وهو صانع هذا التطبيق."
-
+INTRO_ANSWER = "أنا بسام الشتيمي، مساعدك. أخبرني بما ترغب أن تسألني."
 SENSITIVE_PRIVACY_ANSWER = (
     "حرصًا على خصوصيتك وخصوصية الآخرين، بما في ذلك اسم زوجتك أو والدتك، "
     "لا يقدّم بسام أي معلومات شخصية أو عائلية. "
@@ -87,26 +84,29 @@ SENSITIVE_PRIVACY_ANSWER = (
 )
 
 def normalize_ar(text: str) -> str:
-    """تبسيط للنص العربي لتسهيل المطابقة."""
     t = (text or "").strip().lower()
-    # إزالة التشكيل
-    t = re.sub(r"[ًٌٍَُِّْ]", "", t)
-    # توحيد بعض الحروف
-    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
-    t = t.replace("ى", "ي").replace("ة", "ه")
+    t = re.sub(r"[ًٌٍَُِّْ]", "", t)  # إزالة التشكيل
+    t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا")
+    t = t.replace("ى","ي").replace("ة","ه")
     return t
 
+INTRO_PATTERNS = [
+    r"من انت", r"من أنت", r"مين انت", r"من تكون", r"من هو المساعد", r"تعرف بنفسك", r"عرف بنفسك"
+]
 BASSAM_PATTERNS = [
     r"من هو بسام", r"مين بسام", r"من هو بسام الذكي", r"من هو بسام الشتيمي",
     r"من صنع التطبيق", r"من هو صانع التطبيق", r"من المطور", r"من هو صاحب التطبيق",
     r"من مطور التطبيق", r"من برمج التطبيق", r"من انشأ التطبيق", r"مين المطور"
 ]
-
 SENSITIVE_PATTERNS = [
     r"اسم\s+زوج(ة|ه)?\s+بسام", r"زوج(ة|ه)\s+بسام", r"مرت\s+بسام",
     r"اسم\s+ام\s+بسام", r"اسم\s+والدة\s+بسام", r"ام\s+بسام", r"والدة\s+بسام",
     r"اسم\s+زوجة", r"اسم\s+ام", r"من هي زوجة", r"من هي ام"
 ]
+
+def is_intro_query(user_text: str) -> bool:
+    q = normalize_ar(user_text)
+    return any(re.search(p, q) for p in INTRO_PATTERNS)
 
 def is_bassam_query(user_text: str) -> bool:
     q = normalize_ar(user_text)
@@ -136,7 +136,7 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
             break
     return cleaned
 
-# ============================== دوال البحث (Google أولاً ثم DuckDuckGo احتياط فقط)
+# ============================== البحث (Serper ثم DuckDuckGo)
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     if not SERPER_API_KEY:
         raise RuntimeError("No SERPER_API_KEY configured")
@@ -185,7 +185,6 @@ async def smart_search(q: str, num: int = 6) -> Dict:
         else:
             results = search_duckduckgo(q, num)
             used = "DuckDuckGo"
-
         bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
         return {"ok": True, "used": used, "bullets": bullets, "results": results}
     except Exception as e:
@@ -201,39 +200,35 @@ def home(request: Request):
 def health():
     return {"ok": True}
 
-# ============================== بحث نصي (سيرفر-سايد؛ كـ fallback لو أُغلق JS)
+# ============================== بحث نصي (fallback سيرفر)
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
     q = (q or "").strip()
     if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
-    # ✅ رد ثابت عند سؤال "من هو بسام؟" (يعرض في بطاقة الملخّص)
+    # ✅ تعريف المساعد
+    if is_intro_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("search", ip, ua, query=q, engine_used="CANNED_INTRO")
+        ctx = {"request": request, "query": q, "engine_used": "CANNED_INTRO", "results": [], "bullets": [INTRO_ANSWER]}
+        return templates.TemplateResponse("index.html", ctx)
+
+    # ✅ من هو بسام؟
     if is_bassam_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
         log_event("search", ip, ua, query=q, engine_used="CANNED")
-        ctx = {
-            "request": request,
-            "query": q,
-            "engine_used": "CANNED",
-            "results": [],
-            "bullets": [CANNED_ANSWER],
-        }
+        ctx = {"request": request, "query": q, "engine_used": "CANNED", "results": [], "bullets": [CANNED_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    # ✅ رد خصوصية ثابت للأسئلة الشخصية
+    # ✅ خصوصية
     if is_sensitive_personal_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
         log_event("search", ip, ua, query=q, engine_used="CANNED_PRIVACY")
-        ctx = {
-            "request": request,
-            "query": q,
-            "engine_used": "CANNED_PRIVACY",
-            "results": [],
-            "bullets": [SENSITIVE_PRIVACY_ANSWER],
-        }
+        ctx = {"request": request, "query": q, "engine_used": "CANNED_PRIVACY", "results": [], "bullets": [SENSITIVE_PRIVACY_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
     result = await smart_search(q, num=8)
@@ -242,8 +237,7 @@ async def search(request: Request, q: str = Form(...)):
     log_event("search", ip, ua, query=q, engine_used=result.get("used"))
 
     ctx = {
-        "request": request,
-        "query": q,
+        "request": request, "query": q,
         "engine_used": result.get("used"),
         "results": result.get("results", []),
         "bullets": result.get("bullets", []),
@@ -279,19 +273,14 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
         return templates.TemplateResponse(
             "index.html",
-            {
-                "request": request,
-                "uploaded_image": filename,
-                "google_lens": google_lens,
-                "bing_visual": bing_visual,
-                "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇",
-            },
+            {"request": request, "uploaded_image": filename, "google_lens": google_lens,
+             "bing_visual": bing_visual, "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇"}
         )
     except Exception as e:
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
-# ============================== API: ردّ الذكاء باستخدام GPT
+# ============================== API: ردّ الذكاء باستخدام GPT (اختياري)
 @app.post("/api/ask")
 async def api_ask(request: Request):
     """
@@ -304,31 +293,35 @@ async def api_ask(request: Request):
         if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
-        # ✅ رد ثابت فوري قبل استدعاء أي نموذج
+        # ✅ تعريف المساعد
+        if is_intro_query(q):
+            ip = request.client.host if request.client else "?"
+            ua = request.headers.get("user-agent", "?")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED_INTRO")
+            return JSONResponse({"ok": True, "engine_used": "CANNED_INTRO",
+                                 "answer": INTRO_ANSWER,
+                                 "bullets": make_bullets([INTRO_ANSWER], max_items=3),
+                                 "sources": []})
+
+        # ✅ من هو بسام؟
         if is_bassam_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
             log_event("ask", ip, ua, query=q, engine_used="CANNED")
-            return JSONResponse({
-                "ok": True,
-                "engine_used": "CANNED",
-                "answer": CANNED_ANSWER,
-                "bullets": make_bullets([CANNED_ANSWER], max_items=4),
-                "sources": []
-            })
+            return JSONResponse({"ok": True, "engine_used": "CANNED",
+                                 "answer": CANNED_ANSWER,
+                                 "bullets": make_bullets([CANNED_ANSWER], max_items=4),
+                                 "sources": []})
 
-        # ✅ منع الأسئلة الشخصية الحساسة
+        # ✅ خصوصية
         if is_sensitive_personal_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
             log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
-            return JSONResponse({
-                "ok": True,
-                "engine_used": "CANNED_PRIVACY",
-                "answer": SENSITIVE_PRIVACY_ANSWER,
-                "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
-                "sources": []
-            })
+            return JSONResponse({"ok": True, "engine_used": "CANNED_PRIVACY",
+                                 "answer": SENSITIVE_PRIVACY_ANSWER,
+                                 "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
+                                 "sources": []})
 
         # بحث سريع لتجميع سياق + مصادر
         search = await smart_search(q, num=6)
@@ -340,7 +333,7 @@ async def api_ask(request: Request):
             snippet = (r.get("snippet") or "").strip()
             context_lines.append(f"{i}. {title}\n{snippet}\n{link}")
 
-        # إذا لا يوجد مفتاح OpenAI نرجع ملخّص البحث فقط
+        # إذا لا يوجد مفتاح OpenAI نرجّع ملخّص البحث فقط
         if not client:
             return JSONResponse({
                 "ok": True,
@@ -350,43 +343,30 @@ async def api_ask(request: Request):
                 "sources": sources
             })
 
-        # رسالة إلى النموذج (بالعربية + مختصر + مراجع)
+        # رسالة إلى النموذج
         system_msg = (
             "أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
             "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
             "إن لم تكن واثقًا قل لا أعلم."
         )
-        user_msg = (
-            f"السؤال:\n{q}\n\n"
-            "نتائج البحث (للاستئناس والاستشهاد):\n" +
-            "\n\n".join(context_lines[:6])
-        )
+        user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
 
-        # استدعاء Chat Completions (مدعوم على gpt-5-mini)
         resp = client.chat.completions.create(
             model=LLM_MODEL or "gpt-5-mini",
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
+            messages=[{"role": "system", "content": system_msg},
+                      {"role": "user", "content": user_msg}],
             temperature=0.3,
             max_tokens=600,
         )
         answer = (resp.choices[0].message.content or "").strip()
         bullets = make_bullets([answer], max_items=8)
 
-        # سجل العملية
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
         log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
 
-        return JSONResponse({
-            "ok": True,
-            "engine_used": f"OpenAI:{LLM_MODEL}",
-            "answer": answer,
-            "bullets": bullets,
-            "sources": sources
-        })
+        return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
+                             "answer": answer, "bullets": bullets, "sources": sources})
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
