@@ -1,4 +1,4 @@
-# main.py — Bassam Brain (إصدار GPT-5 mini + واجهة /api/ask)
+# main.py — Bassam Brain (إصدار GPT-5 mini + واجهة /api/ask) + رد ثابت وخصوصية محسّنة
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -76,6 +76,45 @@ def log_event(event_type: str, ip: str, ua: str, query: Optional[str]=None,
             "INSERT INTO logs (ts, type, query, file_name, engine_used, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua)
         )
+
+# ============================== رد ثابت لسؤال "من هو بسام؟" والخصوصية
+CANNED_ANSWER = "بسام الشتيمي هو منصوريّ الأصل، وهو صانع هذا التطبيق."
+
+SENSITIVE_PRIVACY_ANSWER = (
+    "حرصًا على خصوصيتك وخصوصية الآخرين، بما في ذلك اسم زوجتك أو والدتك، "
+    "لا يقدّم بسام أي معلومات شخصية أو عائلية. "
+    "يُرجى استخدام التطبيق في الأسئلة العامة أو التعليمية فقط."
+)
+
+def normalize_ar(text: str) -> str:
+    """تبسيط للنص العربي لتسهيل المطابقة."""
+    t = (text or "").strip().lower()
+    # إزالة التشكيل
+    t = re.sub(r"[ًٌٍَُِّْ]", "", t)
+    # توحيد بعض الحروف
+    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    t = t.replace("ى", "ي").replace("ة", "ه")
+    return t
+
+BASSAM_PATTERNS = [
+    r"من هو بسام", r"مين بسام", r"من هو بسام الذكي", r"من هو بسام الشتيمي",
+    r"من صنع التطبيق", r"من هو صانع التطبيق", r"من المطور", r"من هو صاحب التطبيق",
+    r"من مطور التطبيق", r"من برمج التطبيق", r"من انشأ التطبيق", r"مين المطور"
+]
+
+SENSITIVE_PATTERNS = [
+    r"اسم\s+زوج(ة|ه)?\s+بسام", r"زوج(ة|ه)\s+بسام", r"مرت\s+بسام",
+    r"اسم\s+ام\s+بسام", r"اسم\s+والدة\s+بسام", r"ام\s+بسام", r"والدة\s+بسام",
+    r"اسم\s+زوجة", r"اسم\s+ام", r"من هي زوجة", r"من هي ام"
+]
+
+def is_bassam_query(user_text: str) -> bool:
+    q = normalize_ar(user_text)
+    return any(re.search(p, q) for p in BASSAM_PATTERNS)
+
+def is_sensitive_personal_query(user_text: str) -> bool:
+    q = normalize_ar(user_text)
+    return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
 
 # ============================== ذكاء التلخيص الخفيف (داخل الصندوق)
 def _clean(txt: str) -> str:
@@ -169,6 +208,34 @@ async def search(request: Request, q: str = Form(...)):
     if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
+    # ✅ رد ثابت عند سؤال "من هو بسام؟" (يعرض في بطاقة الملخّص)
+    if is_bassam_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("search", ip, ua, query=q, engine_used="CANNED")
+        ctx = {
+            "request": request,
+            "query": q,
+            "engine_used": "CANNED",
+            "results": [],
+            "bullets": [CANNED_ANSWER],
+        }
+        return templates.TemplateResponse("index.html", ctx)
+
+    # ✅ رد خصوصية ثابت للأسئلة الشخصية
+    if is_sensitive_personal_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("search", ip, ua, query=q, engine_used="CANNED_PRIVACY")
+        ctx = {
+            "request": request,
+            "query": q,
+            "engine_used": "CANNED_PRIVACY",
+            "results": [],
+            "bullets": [SENSITIVE_PRIVACY_ANSWER],
+        }
+        return templates.TemplateResponse("index.html", ctx)
+
     result = await smart_search(q, num=8)
     ip = request.client.host if request.client else "?"
     ua = request.headers.get("user-agent", "?")
@@ -236,6 +303,32 @@ async def api_ask(request: Request):
         q = (data.get("q") or "").strip()
         if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
+
+        # ✅ رد ثابت فوري قبل استدعاء أي نموذج
+        if is_bassam_query(q):
+            ip = request.client.host if request.client else "?"
+            ua = request.headers.get("user-agent", "?")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED")
+            return JSONResponse({
+                "ok": True,
+                "engine_used": "CANNED",
+                "answer": CANNED_ANSWER,
+                "bullets": make_bullets([CANNED_ANSWER], max_items=4),
+                "sources": []
+            })
+
+        # ✅ منع الأسئلة الشخصية الحساسة
+        if is_sensitive_personal_query(q):
+            ip = request.client.host if request.client else "?"
+            ua = request.headers.get("user-agent", "?")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
+            return JSONResponse({
+                "ok": True,
+                "engine_used": "CANNED_PRIVACY",
+                "answer": SENSITIVE_PRIVACY_ANSWER,
+                "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
+                "sources": []
+            })
 
         # بحث سريع لتجميع سياق + مصادر
         search = await smart_search(q, num=6)
