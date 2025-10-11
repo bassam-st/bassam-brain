@@ -94,3 +94,12 @@ h3{margin-top:0}
   padding:8px 14px; border-radius:10px; cursor:pointer; font-weight:700
 }
 .more-btn:hover{ background:#1f2937; }
+
+/* ✅ إظهار الروابط كاملة وواضحة بدون نقاط (...) */
+.source-url, .result a, .sources a {
+  overflow: visible !important;
+  white-space: normal !important;
+  text-overflow: unset !important;
+  word-break: break-all !important;
+  direction: ltr !important;
+}
