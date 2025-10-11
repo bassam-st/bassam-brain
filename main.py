@@ -1,5 +1,6 @@
-# main.py — Bassam Brain (FastAPI) + بحث + رفع صور + GPT API
-# + إشعارات مباريات OneSignal مجدولة + Deeplink ياسين/جنرال + لوحة إدارة
+# main.py — Bassam Brain (FastAPI)
+# بحث + رفع صور + GPT API + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
+# لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر
 
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 import datetime as dt
@@ -53,9 +54,9 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ----------------------------- OneSignal + الدوريات + التوقيت + باكدجات
-ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
-ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
-TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()  # ← توقيت مكة المكرمة
+ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()  # 81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1
+ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()  # os_v2_app_...
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()   # توقيت مكة
 TZ = ZoneInfo(TIMEZONE)
 
 LEAGUE_IDS = [x.strip() for x in os.getenv(
@@ -221,7 +222,7 @@ async def search(request: Request, q: str = Form(...)):
     if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
-    # تعريف المساعد
+    # تعريفات ثابتة
     if is_intro_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
@@ -362,10 +363,21 @@ async def api_ask(request: Request):
     except Exception as e:
         traceback.print_exc();  return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-# ============================== Service Worker على الجذر
+# ============================== Service Workers
 @app.get("/sw.js")
 def sw_js():
     path = os.path.join(STATIC_DIR, "pwa", "sw.js")
+    return FileResponse(path, media_type="application/javascript")
+
+# ⚠️ مسارات OneSignal workers على جذر الموقع
+@app.get("/OneSignalSDKWorker.js")
+def onesignal_worker_root():
+    path = os.path.join(STATIC_DIR, "onesignal", "OneSignalSDKWorker.js")
+    return FileResponse(path, media_type="application/javascript")
+
+@app.get("/OneSignalSDKUpdaterWorker.js")
+def onesignal_updater_root():
+    path = os.path.join(STATIC_DIR, "onesignal", "OneSignalSDKUpdaterWorker.js")
     return FileResponse(path, media_type="application/javascript")
 
 # ============================== Deeplink (فتح البث في ياسين/جنرال)
@@ -377,7 +389,6 @@ def deeplink(request: Request, match: Optional[str] = None):
     tpl_path = os.path.join(TEMPLATES_DIR, "deeplink.html")
     if os.path.exists(tpl_path):
         return templates.TemplateResponse("deeplink.html", ctx)
-    # نسخة مبسطة إذا لم يوجد قالب
     html = f"""
     <!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"/>
     <body style="text-align:center;padding-top:60px;font-family:sans-serif;background:#0b0f19;color:#fff">
@@ -436,11 +447,10 @@ def admin_export(request: Request):
         output.seek(0)
     return StreamingResponse(iter([output.read()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
-    # ============================== أزرار اختبار الإشعارات من لوحة الإدارة
 
+# ============================== إرسال إشعارات يدوية من لوحة الإدارة (اختياري)
 @app.get("/admin/push-test")
 def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي", body: str = "مرحبًا! هذا إشعار من بسام الذكي"):
-    """إرسال إشعار بسيط لجميع المشتركين"""
     if not is_admin(request):
         return RedirectResponse(url="/admin?login=1", status_code=302)
     ok = send_push(title, body, "/")
@@ -450,14 +460,12 @@ def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي
 def admin_push_match(request: Request,
                      home: str = "Al Hilal",
                      away: str = "Al Nassr",
-                     when: str = "اليوم",
-                     before: bool = False):
-    """إرسال إشعار مباراة (قبل 30 دقيقة أو عند البداية)"""
+                     before: bool = True):
     if not is_admin(request):
         return RedirectResponse(url="/admin?login=1", status_code=302)
     if before:
         title = f"⏰ بعد 30 دقيقة: {home} × {away}"
-        body = f"البطولة: (تحديد تلقائي) — {when}"
+        body = "جاهزين؟"
     else:
         title = f"🎬 بدأت الآن: {home} × {away}"
         body = "انطلقت المباراة!"
@@ -465,9 +473,8 @@ def admin_push_match(request: Request,
     ok = send_push(title, body, deeplink_path)
     return JSONResponse({"ok": ok})
 
-# ============================== مباريات اليوم + إشعارات OneSignal (نهائي)
+# ============================== مباريات اليوم + إشعارات OneSignal (بتوقيت مكة)
 def _to_local(date_str: str, time_str: str) -> dt.datetime:
-    """يبني datetime من تاريخ/وقت API ويحوّله لمنطقة TIMEZONE"""
     t = (time_str or "00:00:00").split("+")[0]
     naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
     if naive.tzinfo is None:
@@ -475,7 +482,6 @@ def _to_local(date_str: str, time_str: str) -> dt.datetime:
     return naive.astimezone(TZ)
 
 def fetch_today_matches() -> List[Dict]:
-    """يسحب مباريات اليوم للدوريات المحددة"""
     today = dt.date.today()
     s_today = today.strftime("%Y-%m-%d")
     matches: List[Dict] = []
@@ -506,7 +512,6 @@ def fetch_today_matches() -> List[Dict]:
     return matches
 
 def send_push(title: str, body: str, url_path: str = "/") -> bool:
-    """إرسال إشعار OneSignal لجميع المشتركين — (Bearer v2)"""
     if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY):
         return False
     full_url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
@@ -517,7 +522,9 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
         "contents": {"ar": body, "en": body},
         "url": full_url,
     }
-    headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json; charset=utf-8"}
+    # v16 key = Bearer
+    headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}",
+               "Content-Type": "application/json; charset=utf-8"}
     try:
         with httpx.Client(timeout=20) as client:
             r = client.post("https://api.onesignal.com/notifications", headers=headers, json=payload)
@@ -525,22 +532,18 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
     except Exception:
         return False
 
-def job_morning_digest():
-    """ملخص مباريات اليوم — الساعة 09:00 حسب TIMEZONE"""
+def job_daily_digest_15():
+    """ملخص مباريات اليوم — الساعة 15:00 بتوقيت مكة"""
     matches = fetch_today_matches()
     if not matches:
         return
     lines = [f"{m['kickoff'].strftime('%H:%M')} - {m['home']} × {m['away']} ({m['league']})" for m in matches]
     title = f"مباريات اليوم {dt.date.today().strftime('%Y-%m-%d')}"
     body = "\n".join(lines[:10])
-    ok = send_push(title, body, "/deeplink")
-    try:
-        log_event("push", "server", "scheduler", query=title, engine_used=f"morning:{'ok' if ok else 'fail'}")
-    except:
-        pass
+    send_push(title, body, "/")
 
 def job_half_hour_and_kickoff():
-    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية"""
+    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية (بتوقيت مكة)"""
     matches = fetch_today_matches()
     if not matches:
         return
@@ -556,7 +559,9 @@ def job_half_hour_and_kickoff():
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    sch.add_job(job_morning_digest, CronTrigger(hour=9, minute=0, timezone=TIMEZONE))
+    # ⏰ 15:00 يوميًا مكة
+    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))
+    # ⏱️ كل 5 دقائق لمراقبة -30 دقيقة والبداية
     sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
     sch.start()
 
