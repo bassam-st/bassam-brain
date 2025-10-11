@@ -15,16 +15,14 @@
   <!-- أيقونة -->
   <link rel="icon" href="/static/icons/icon-192.png" type="image/png"/>
 
-  <!-- OneSignal SDK v16 -->
+  <!-- OneSignal SDK -->
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-
   <script>
-    // تهيئة OneSignal
     window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(function (OneSignal) {
+    OneSignalDeferred.push(function(OneSignal) {
       OneSignal.init({
-        appId: "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1",
-        notifyButton: { enable: true },
+        appId: "{{ onesignal_app_id }}",      // مُمرّر من الخادم
+        notifyButton: { enable: true },        // زر الإشعارات العائم
         allowLocalhostAsSecureOrigin: true
       });
     });
@@ -32,14 +30,14 @@
 </head>
 
 <body>
-  <header class="top" style="text-align:center">
+  <header class="top">
     <img src="/static/icons/icon-192.png" alt="B" style="width:64px;height:64px;border-radius:16px;">
     <h1>بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
   </header>
 
   <section class="card" style="text-align:center;">
     <button id="notifyBtn" class="primary">🔔 تفعيل الإشعارات</button>
-    <p style="margin-top:8px;color:#aaa;">اضغط لتفعيل تنبيهات المباريات حتى لو التطبيق مغلق.</p>
+    <p style="margin-top:8px;color:#aaa;">اضغط لتفعيل التنبيهات.</p>
   </section>
 
   <section class="card">
@@ -52,37 +50,28 @@
     <div id="sources" class="sources"></div>
   </section>
 
-  <section class="card">
-    <h3>بحث بالصورة (كاميرا / الاستوديو / ملفات)</h3>
-    <form id="imgForm" enctype="multipart/form-data">
-      <input type="file" id="imgFile" accept="image/*" />
-      <button id="uploadBtn" type="submit">📤 ارفع الصورة وابحث</button>
-    </form>
-  </section>
-
   <footer style="text-align:center;margin-top:32px;">
-    <p>© Bassam AI 2025 — <a href="/admin" target="_blank">لوحة الإدارة</a></p>
+    <p>© Bassam AI 2025 — <a href="/admin/health" target="_blank">حالة النظام</a> • <a href="/admin/push-test" target="_blank">اختبار إشعار</a></p>
   </footer>
 
-  <!-- كود JS الرئيسي للتطبيق -->
+  <!-- كود JS الرئيسي (اختياري) -->
   <script src="/static/app.js"></script>
 
-  <!-- زر تفعيل الإشعارات -->
+  <!-- تفعيل الإشعارات بزر المستخدم -->
   <script>
-    const btn = document.getElementById('notifyBtn');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        try {
-          const permission = await OneSignal.Notifications.requestPermission();
-          alert(permission === 'granted'
-            ? '✅ تم تفعيل الإشعارات بنجاح'
-            : '⚠️ لم يتم التفعيل — اسمح بالإشعارات من إعدادات الموقع');
-        } catch (e) {
-          console.error(e);
-          alert('حدث خطأ أثناء تفعيل الإشعارات');
+    document.getElementById('notifyBtn').addEventListener('click', async () => {
+      try {
+        const perm = await OneSignal.Notifications.requestPermission();
+        if (perm === 'granted') {
+          alert('✅ تم تفعيل الإشعارات بنجاح!');
+        } else {
+          alert('⚠️ لم يتم السماح بالإشعارات.');
         }
-      });
-    }
+      } catch (e) {
+        console.error(e);
+        alert('حدث خطأ أثناء طلب الإذن.');
+      }
+    });
   </script>
 </body>
 </html>
