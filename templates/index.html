@@ -1,85 +1,120 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>بسام الذكي – بحث عميق</title>
-  <link rel="manifest" href="/static/pwa/manifest.json">
-  <meta name="theme-color" content="#0b0f19"/>
+-12,7 +12,7 @@
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
   <link rel="stylesheet" href="/static/style.css"/>
+
+  <!-- ✅ OneSignal Web SDK (v16) -->
+  <!-- ✅ OneSignal Web SDK -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
-<body>
-<header class="top">
-  <h1>بسام الذكي — بحث عميق وتلخيص تلقائي</h1>
-  <div class="actions">
-    <button id="installBtn" hidden>تثبيت التطبيق</button>
-    <button id="themeBtn" title="الوضع الليلي/النهاري">🌙/☀️</button>
-  </div>
-</header>
 
-<section class="card">
-  <form id="searchForm" class="row">
-    <input id="q" placeholder="اكتب سؤالك…"/>
-    <label class="chk"><input type="checkbox" id="want_prices"/> روابط الأسعار</label>
-    <button>بحث</button>
-  </form>
+@@ -24,11 +24,17 @@
+    <h1>بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
 
-  <div id="answer" class="answer-box">…</div>
-  <div id="sources" class="sources"></div>
-</section>
+    <!-- زر تفعيل الإشعارات -->
+    <div style="text-align:center;margin:12px 0;">
+      <button id="enablePush" class="btn btn-alt" style="padding:10px 18px;border-radius:10px;cursor:pointer;">
+        🔔 تفعيل الإشعارات
+      </button>
+      <p id="pushStatus" style="font-size:13px;color:#9ca3af;margin-top:6px;">
+    <div style="text-align:center;margin:14px 0;">
+      <button id="enablePush" style="
+        background:#7c3aed;
+        color:#fff;
+        border:none;
+        border-radius:12px;
+        padding:10px 20px;
+        font-size:16px;
+        cursor:pointer;
+      ">🔔 تفعيل الإشعارات</button>
+      <p id="pushHint" style="font-size:13px;color:#a1a1aa;margin-top:6px;">
+        اضغط لتفعيل تنبيهات المباريات حتى لو التطبيق مغلق.
+      </p>
+    </div>
+@@ -109,54 +115,68 @@ <h3>نتائج البحث ({{ engine_used }})</h3>
+  <!-- سكربتات الصفحة -->
+  <script src="/static/app.js"></script>
 
-<footer>
-  <p>© Bassam AI 2025 • <a href="/admin/health">حالة النظام</a></p>
-</footer>
+  <!-- ✅ تفعيل إشعارات OneSignal وزر الجرس -->
+  <!-- ✅ إشعارات OneSignal مع حفظ الحالة -->
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      // تهيئة OneSignal
+      await OneSignal.init({
+        appId: "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1", // App ID الخاص بك
+        appId: "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1",
+        serviceWorkerPath: "/OneSignalSDKWorker.js",
+        serviceWorkerUpdaterPath: "/OneSignalSDKUpdaterWorker.js",
+        serviceWorkerParam: { scope: "/" },
+        allowLocalhostAsSecureOrigin: true
+      });
 
-<script>
-async function postJSON(url, data){
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(data)
-  });
-  return r.json();
-}
+      const btn = document.getElementById('enablePush');
+      const status = document.getElementById('pushStatus');
+      const btn = document.getElementById("enablePush");
+      const hint = document.getElementById("pushHint");
 
-function el(id){ return document.getElementById(id); }
+      // دالة لتحديث الزر
+      async function refreshState() {
+        try {
+          const perm = await OneSignal.Notifications.getPermissionState(); // granted | denied | default
+          const sub = await OneSignal.User.PushSubscription.get();
 
-async function doSearch(e){
-  e.preventDefault();
-  el("answer").textContent = "… جاري البحث";
-  el("sources").innerHTML = "";
-  const q = el("q").value.trim();
-  const want_prices = el("want_prices").checked;
-  try{
-    const res = await postJSON("/search", { q, want_prices });
-    if(!res.ok){ throw new Error(res.error || "فشل البحث"); }
-    el("answer").textContent = res.answer || "لم أجد نتيجة";
-    if(res.sources?.length){
-      const srcs = res.sources.map(s=>`<li><a href="${s.url}" target="_blank">${s.title}</a></li>`).join("");
-      el("sources").innerHTML = `<h3>المصادر:</h3><ul>${srcs}</ul>`;
-    }
-  }catch(err){
-    el("answer").textContent = "حدث خطأ: " + err.message;
-  }
-}
+          if (perm === "denied") {
+            btn.textContent = "🚫 الإشعارات محظورة";
+            btn.style.background = "#dc2626";
+            btn.disabled = true;
+            hint.textContent = "افتح إعدادات الموقع واسمح بالإشعارات.";
+            return;
+          }
 
-document.getElementById("searchForm").addEventListener("submit", doSearch);
+          if (sub && sub.optedIn) {
+            btn.textContent = "✅ الإشعارات مفعّلة";
+            btn.style.background = "#16a34a";
+            btn.style.color = "#fff";
+            btn.disabled = true;
+            status.textContent = "ستصلك تنبيهات المباريات حتى لو التطبيق مغلق.";
+            hint.textContent = "ستصلك تنبيهات المباريات حتى لو التطبيق مغلق.";
+          } else {
+            btn.textContent = "🔔 تفعيل الإشعارات";
+            btn.style.background = "#7c3aed";
+            btn.style.color = "#fff";
+            btn.disabled = false;
+            status.textContent = "اضغط لتفعيل تنبيهات المباريات والأخبار.";
+            hint.textContent = "اضغط لتفعيل تنبيهات المباريات والأخبار.";
+          }
+        } catch(e) {
+          console.log("State error", e);
+        } catch (e) {
+          console.error(e);
+        }
+      }
 
-// زر التبديل بين الوضع الليلي والنهاري
-const themeBtn = document.getElementById("themeBtn");
-themeBtn.onclick = ()=>{
-  const dark = document.body.classList.toggle("dark");
-  localStorage.setItem("theme", dark ? "dark" : "light");
-};
-if(localStorage.getItem("theme")==="dark") document.body.classList.add("dark");
+      // زر التفعيل
+      btn.addEventListener('click', async () => {
+      // عند الضغط على الزر
+      btn.addEventListener("click", async () => {
+        try {
+          await OneSignal.Slidedown.promptPush({ force: true });
+          await refreshState();
+        } catch(e) {
+          console.log("Prompt error", e);
+          await OneSignal.Notifications.requestPermission();
+          await OneSignal.User.PushSubscription.optIn();
+        } catch (e) {
+          console.error(e);
+        }
+        await refreshState();
+      });
 
-// زر تثبيت التطبيق PWA
-window.addEventListener('beforeinstallprompt', (e)=>{
-  e.preventDefault();
-  const installBtn = document.getElementById("installBtn");
-  installBtn.hidden = false;
-  installBtn.onclick = ()=> e.prompt();
-});
-</script>
-</body>
-</html>
+      // تحديث الحالة عند أي تغيير من OneSignal
+      OneSignal.User.PushSubscription.addEventListener('change', refreshState);
+      // مراقبة أي تغييرات
+      OneSignal.Notifications.addEventListener("permissionChange", refreshState);
+      OneSignal.User.PushSubscription.addEventListener("change", refreshState);
+
+      // حالة أولية عند التحميل
+      // فحص الحالة أول مرة
+      await refreshState();
+    });
+  </
