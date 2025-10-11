@@ -11,6 +11,17 @@
   <link rel="manifest" href="/static/pwa/manifest.json"/>
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
   <link rel="stylesheet" href="/static/style.css"/>
+
+  <!-- ✅ إشعارات OneSignal -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/onesignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      await OneSignal.init({
+        appId: "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1", // App ID الخاص بـ Bassam
+      });
+    });
+  </script>
 </head>
 
 <body>
