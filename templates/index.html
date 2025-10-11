@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
   <link rel="stylesheet" href="/static/style.css"/>
 
-  <!-- ✅ OneSignal SDK -->
+  <!-- ✅ OneSignal Web SDK -->
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
 
@@ -23,12 +23,18 @@
     </div>
     <h1>بسام الذكي — مساعدك الشخصي في البحث والتلخيص</h1>
 
-    <!-- زر الإشعارات -->
-    <div style="text-align:center;margin:12px 0;">
-      <button id="enablePush" class="btn btn-alt" style="padding:10px 18px;border-radius:10px;cursor:pointer;">
-        🔔 تفعيل الإشعارات
-      </button>
-      <p id="pushStatus" style="font-size:13px;color:#9ca3af;margin-top:6px;">
+    <!-- زر تفعيل الإشعارات -->
+    <div style="text-align:center;margin:14px 0;">
+      <button id="enablePush" style="
+        background:#7c3aed;
+        color:#fff;
+        border:none;
+        border-radius:12px;
+        padding:10px 20px;
+        font-size:16px;
+        cursor:pointer;
+      ">🔔 تفعيل الإشعارات</button>
+      <p id="pushHint" style="font-size:13px;color:#a1a1aa;margin-top:6px;">
         اضغط لتفعيل تنبيهات المباريات حتى لو التطبيق مغلق.
       </p>
     </div>
@@ -106,13 +112,14 @@
   <!-- زر تثبيت التطبيق -->
   <button id="installBtn" class="install-btn" style="display:none">📱 تثبيت تطبيق بسام الذكي</button>
 
-  <!-- سكربت التطبيق -->
+  <!-- سكربتات الصفحة -->
   <script src="/static/app.js"></script>
 
-  <!-- ✅ إشعارات OneSignal -->
+  <!-- ✅ إشعارات OneSignal مع حفظ الحالة -->
   <script>
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
+      // تهيئة OneSignal
       await OneSignal.init({
         appId: "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1",
         serviceWorkerPath: "/OneSignalSDKWorker.js",
@@ -121,37 +128,55 @@
         allowLocalhostAsSecureOrigin: true
       });
 
-      const btn = document.getElementById('enablePush');
-      const status = document.getElementById('pushStatus');
+      const btn = document.getElementById("enablePush");
+      const hint = document.getElementById("pushHint");
 
+      // دالة لتحديث الزر
       async function refreshState() {
-        const perm = await OneSignal.Notifications.getPermissionState();
-        const sub = await OneSignal.User.PushSubscription.get();
-        if (perm === 'denied') {
-          btn.textContent = "🚫 الإشعارات محظورة من المتصفح";
-          btn.disabled = true; btn.style.background = "#dc2626";
-          status.textContent = "افتح إعدادات الموقع واسمح بالإشعارات.";
-        } else if (sub && sub.optedIn) {
-          btn.textContent = "✅ الإشعارات مفعّلة";
-          btn.disabled = true; btn.style.background = "#16a34a";
-          status.textContent = "ستصلك تنبيهات المباريات حتى لو التطبيق مغلق.";
-        } else {
-          btn.textContent = "🔔 تفعيل الإشعارات";
-          btn.disabled = false; btn.style.background = "#7c3aed";
-          status.textContent = "اضغط لتفعيل تنبيهات المباريات والأخبار.";
+        try {
+          const perm = await OneSignal.Notifications.getPermissionState(); // granted | denied | default
+          const sub = await OneSignal.User.PushSubscription.get();
+
+          if (perm === "denied") {
+            btn.textContent = "🚫 الإشعارات محظورة";
+            btn.style.background = "#dc2626";
+            btn.disabled = true;
+            hint.textContent = "افتح إعدادات الموقع واسمح بالإشعارات.";
+            return;
+          }
+
+          if (sub && sub.optedIn) {
+            btn.textContent = "✅ الإشعارات مفعّلة";
+            btn.style.background = "#16a34a";
+            btn.disabled = true;
+            hint.textContent = "ستصلك تنبيهات المباريات حتى لو التطبيق مغلق.";
+          } else {
+            btn.textContent = "🔔 تفعيل الإشعارات";
+            btn.style.background = "#7c3aed";
+            btn.disabled = false;
+            hint.textContent = "اضغط لتفعيل تنبيهات المباريات والأخبار.";
+          }
+        } catch (e) {
+          console.error(e);
         }
       }
 
-      btn.addEventListener('click', async () => {
+      // عند الضغط على الزر
+      btn.addEventListener("click", async () => {
         try {
           await OneSignal.Notifications.requestPermission();
           await OneSignal.User.PushSubscription.optIn();
-        } catch (e) { console.error(e); }
+        } catch (e) {
+          console.error(e);
+        }
         await refreshState();
       });
 
+      // مراقبة أي تغييرات
       OneSignal.Notifications.addEventListener("permissionChange", refreshState);
       OneSignal.User.PushSubscription.addEventListener("change", refreshState);
+
+      // فحص الحالة أول مرة
       await refreshState();
     });
   </script>
