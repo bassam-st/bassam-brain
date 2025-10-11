@@ -436,6 +436,34 @@ def admin_export(request: Request):
         output.seek(0)
     return StreamingResponse(iter([output.read()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
+    # ============================== أزرار اختبار الإشعارات من لوحة الإدارة
+
+@app.get("/admin/push-test")
+def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي", body: str = "مرحبًا! هذا إشعار من بسام الذكي"):
+    """إرسال إشعار بسيط لجميع المشتركين"""
+    if not is_admin(request):
+        return RedirectResponse(url="/admin?login=1", status_code=302)
+    ok = send_push(title, body, "/")
+    return JSONResponse({"ok": ok})
+
+@app.get("/admin/push-match")
+def admin_push_match(request: Request,
+                     home: str = "Al Hilal",
+                     away: str = "Al Nassr",
+                     when: str = "اليوم",
+                     before: bool = False):
+    """إرسال إشعار مباراة (قبل 30 دقيقة أو عند البداية)"""
+    if not is_admin(request):
+        return RedirectResponse(url="/admin?login=1", status_code=302)
+    if before:
+        title = f"⏰ بعد 30 دقيقة: {home} × {away}"
+        body = f"البطولة: (تحديد تلقائي) — {when}"
+    else:
+        title = f"🎬 بدأت الآن: {home} × {away}"
+        body = "انطلقت المباراة!"
+    deeplink_path = f"/deeplink?match={quote(f'{home} vs {away}')}"
+    ok = send_push(title, body, deeplink_path)
+    return JSONResponse({"ok": ok})
 
 # ============================== مباريات اليوم + إشعارات OneSignal (نهائي)
 def _to_local(date_str: str, time_str: str) -> dt.datetime:
