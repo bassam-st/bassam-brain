@@ -1,15 +1,20 @@
-# main.py — Bassam Brain (GPT-5 mini /api/ask) + ردود ثابتة (من أنت؟/من هو بسام؟) + خصوصية
-import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
-from datetime import datetime
+# main.py — Bassam Brain (FastAPI) + بحث + رفع صور + GPT API + إشعارات مباريات OneSignal + Deeplink
+import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, datetime as dt
 from typing import Optional, List, Dict
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import httpx
 from duckduckgo_search import DDGS
+
+# جدولة
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from zoneinfo import ZoneInfo
 
 # OpenAI (اختياري)
 from openai import OpenAI
@@ -40,6 +45,24 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
 
+# إشعارات OneSignal + الدوريات + التوقيت
+ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
+ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Qatar").strip()
+LEAGUE_IDS = [x.strip() for x in os.getenv("LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790").split(",") if x.strip()]
+TZ = ZoneInfo(TIMEZONE)
+
+# أسماء الدوريات حسب TheSportsDB
+LEAGUE_NAME_BY_ID = {
+    "4328": "English Premier League",
+    "4335": "Spanish La Liga",
+    "4332": "Italian Serie A",
+    "4331": "German Bundesliga",
+    "4334": "French Ligue 1",
+    "4480": "Saudi Pro League",
+    "4790": "UEFA Champions League",
+}
+
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ============================== قاعدة البيانات
@@ -55,7 +78,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
-                type TEXT NOT NULL,      -- search | image | ask
+                type TEXT NOT NULL,      -- search | image | ask | push
                 query TEXT,
                 file_name TEXT,
                 engine_used TEXT,
@@ -71,7 +94,7 @@ def log_event(event_type: str, ip: str, ua: str, query: Optional[str]=None,
     with db() as con:
         con.execute(
             "INSERT INTO logs (ts, type, query, file_name, engine_used, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua)
+            (dt.datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua)
         )
 
 # ============================== ردود ثابتة + خصوصية
@@ -377,6 +400,26 @@ def sw_js():
     path = os.path.join(STATIC_DIR, "pwa", "sw.js")
     return FileResponse(path, media_type="application/javascript")
 
+# ============================== Deeplink (فتح البث في ياسين/جنرال)
+@app.get("/deeplink", response_class=HTMLResponse)
+def deeplink(request: Request, match: Optional[str] = None):
+    """يستقبل ?match=TeamA%20vs%20TeamB ويعرض روابط فتح ياسين/جنرال"""
+    ctx = {"request": request, "mat": (match or "").strip()}
+    # حاول استخدام القالب إن وُجد، وإلا اعرض HTML مبسط
+    tpl_path = os.path.join(TEMPLATES_DIR, "deeplink.html")
+    if os.path.exists(tpl_path):
+        return templates.TemplateResponse("deeplink.html", ctx)
+    html = f"""
+    <!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"/>
+    <body style="text-align:center;padding-top:60px;font-family:sans-serif;background:#0b0f19;color:#fff">
+      <h2>جاري فتح القناة...</h2>
+      <p>{ctx['mat']}</p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme=yacine;package=com.yacine.app;end">افتح في ياسين</a></p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme=general;package=com.general.live;end">افتح في جنرال</a></p>
+    </body></html>
+    """
+    return HTMLResponse(html)
+
 # ============================== لوحة الإدارة
 def make_token(password: str) -> str:
     return hashlib.sha256((password + "|" + ADMIN_SECRET).encode("utf-8")).hexdigest()
@@ -423,3 +466,102 @@ def admin_export(request: Request):
         output.seek(0)
     return StreamingResponse(iter([output.read()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
+
+# ============================== مباريات اليوم + إشعارات OneSignal
+def _to_local(date_str: str, time_str: str) -> dt.datetime:
+    """يبني datetime من تاريخ/وقت API ويحوّله لمنطقة TIMEZONE"""
+    t = (time_str or "00:00:00").split("+")[0]
+    # نحاول اعتبار الوقت بتوقيت UTC (كما تُرجعه بعض واجهات TheSportsDB)
+    utc_naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
+    if utc_naive.tzinfo is None:
+        utc_naive = utc_naive.replace(tzinfo=dt.timezone.utc)
+    return utc_naive.astimezone(TZ)
+
+def fetch_today_matches():
+    today = dt.date.today()
+    s_today = today.strftime("%Y-%m-%d")
+    matches: List[Dict] = []
+    with httpx.Client(timeout=20) as client:
+        for lid in LEAGUE_IDS:
+            lname = LEAGUE_NAME_BY_ID.get(lid)
+            if not lname: continue
+            url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={s_today}&l={quote(lname)}"
+            try:
+                data = client.get(url).json()
+            except Exception:
+                continue
+            for e in (data or {}).get("events", []) or []:
+                home, away = e.get("strHomeTeam"), e.get("strAwayTeam")
+                if not (home and away): 
+                    continue
+                kickoff = _to_local(e.get("dateEvent"), e.get("strTime") or "00:00:00")
+                matches.append({
+                    "id": e.get("idEvent"),
+                    "league": e.get("strLeague") or lname,
+                    "home": home, "away": away,
+                    "kickoff": kickoff,
+                    "venue": e.get("strVenue") or "",
+                    "click_url": f"/deeplink?match={quote(f'{home} vs {away}')}"
+                })
+    matches.sort(key=lambda x: x["kickoff"])
+    return matches
+
+def send_push(title: str, body: str, url_path: str = "/"):
+    if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY):
+        return False, "OneSignal not configured"
+    url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
+    payload = {
+        "app_id": ONESIGNAL_APP_ID,
+        "included_segments": ["Subscribed Users"],
+        "headings": {"ar": title},
+        "contents": {"ar": body},
+        "url": url
+    }
+    headers = {"Authorization": f"Basic {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json"}
+    try:
+        with httpx.Client(timeout=20) as client:
+            r = client.post("https://api.onesignal.com/notifications", headers=headers, json=payload)
+        ok = r.status_code in (200, 201)
+        return ok, r.text
+    except Exception as e:
+        return False, str(e)
+
+def job_morning_digest():
+    matches = fetch_today_matches()
+    if not matches: 
+        return
+    lines = [f"{m['kickoff'].strftime('%H:%M')} - {m['home']} × {m['away']} ({m['league']})" for m in matches]
+    title = f"مباريات اليوم {dt.date.today().strftime('%Y-%m-%d')}"
+    body = "\n".join(lines[:10])
+    ok, _ = send_push(title, body)
+    try:
+        log_event("push", "server", "scheduler", query=title, engine_used=f"morning:{'ok' if ok else 'fail'}")
+    except: pass
+
+def job_half_hour_and_kickoff():
+    matches = fetch_today_matches()
+    if not matches: 
+        return
+    now = dt.datetime.now(TZ)
+    for m in matches:
+        mins = int((m["kickoff"] - now).total_seconds() // 60)
+        if 25 <= mins <= 35:
+            send_push(f"📢 بعد 30 دقيقة: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
+        if -2 <= mins <= 2:
+            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
+
+def start_scheduler():
+    sch = BackgroundScheduler(timezone=TIMEZONE)
+    # ملخص صباحي 9:00
+    sch.add_job(job_morning_digest, CronTrigger(hour=9, minute=0, timezone=TIMEZONE))
+    # فحص كل 5 دقائق للـ -30 دقيقة وبدء المباراة
+    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
+    sch.start()
+
+@app.on_event("startup")
+def _on_startup():
+    # ابدأ الجدولة عند تشغيل السيرفر
+    try:
+        start_scheduler()
+    except Exception:
+        traceback.print_exc()
