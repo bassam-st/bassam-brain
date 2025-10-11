@@ -1,76 +1,52 @@
-# main.py
-import os
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+# main.py — Bassam Brain (الإصدار المستقر قبل إشعارات OneSignal)
+import os, traceback
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import httpx
 
-# ===== إعداد مفاتيح OneSignal =====
-ONESIGNAL_APP_ID = os.getenv(
-    "ONESIGNAL_APP_ID",
-    "81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1"  # App ID
-)
+from core.search import deep_search
+from core.utils import ensure_dirs
 
-# ↓↓↓ ضع هنا الـ REST API KEY (القيمة السرّية الطويلة التي تبدأ بـ os_v2_app_)
-ONESIGNAL_REST_API_KEY = os.getenv(
-    "ONESIGNAL_REST_API_KEY",
-    "os_v2_app_qhd7zuenxzcinh46pkaoiypv2h4d4ozpcsuedgnz3hzev4lmm5fepsqeykluuw6cj5stzrluiw6gdu2ujliagiscsqxsdmfngvwfoty"
-)
+# المسارات
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
+ensure_dirs(TEMPLATES_DIR, STATIC_DIR, UPLOADS_DIR, CACHE_DIR)
 
-# ===== تطبيق FastAPI =====
-app = FastAPI(title="Bassam Brain")
-
-# ملفات الستاتك والقوالب
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# إعداد التطبيق
+app = FastAPI(title="Bassam — Deep Search & Summary")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 
-# الصفحة الرئيسية
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "onesignal_app_id": ONESIGNAL_APP_ID})
+async def home(request: Request):
+    """الصفحة الرئيسية"""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
-# Service Worker مسار قصير للجذر /sw.js حتى لا يظهر 404
-@app.get("/sw.js")
-async def sw_proxy():
-    sw_path = "static/sw.js"
-    if not os.path.exists(sw_path):
-        raise HTTPException(status_code=404, detail="sw.js not found")
-    return FileResponse(sw_path, media_type="application/javascript")
+@app.post("/search")
+async def search(request: Request):
+    """نقطة البحث"""
+    try:
+        data = await request.json()
+        q = data.get("q", "").strip()
+        want_prices = data.get("want_prices", False)
+        if not q:
+            return {"ok": False, "error": "empty_query"}
+
+        # استدعاء البحث العميق
+        result = await deep_search(q, want_prices=want_prices)
+        return {"ok": True, **result}
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
 
 
-# صحة التكامل
 @app.get("/admin/health")
 async def health():
-    return {
-        "message": "👋 Bassam Brain Notifications تعمل الآن بنجاح",
-        "status": "ready",
-        "onesignal_app_id": f"{ONESIGNAL_APP_ID[:8]}..."
-    }
-
-
-# اختبار إرسال إشعار (GET بسيط)
-@app.get("/admin/push-test")
-async def push_test():
-    url = "https://onesignal.com/api/v1/notifications"
-    headers = {
-        # ملاحظة: v1 يحتاج Basic <REST_KEY>. استخدم المفتاح السري (الطويل الذي يبدأ os_v2_app_)
-        "Authorization": f"Basic {ONESIGNAL_REST_API_KEY}",
-        "Content-Type": "application/json; charset=utf-8",
-    }
-    payload = {
-        "app_id": ONESIGNAL_APP_ID,
-        "included_segments": ["Subscribed Users"],
-        "headings": {"en": "Bassam Brain"},
-        "contents": {"en": "Push test ✅ من لوحة الإدارة"},
-        "url": "https://bassam-brain.onrender.com/",
-        "chrome_web_icon": "https://bassam-brain.onrender.com/static/icons/icon-192.png",
-    }
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        if r.status_code >= 400:
-            raise HTTPException(status_code=500, detail=f"OneSignal error: {r.status_code} {r.text}")
-        return {"ok": True, "onesignal_response": r.json()}
+    """فحص الحالة"""
+    return {"status": "ready", "message": "Bassam Brain يعمل الآن بنجاح ✅"}
