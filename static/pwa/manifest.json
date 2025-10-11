@@ -1,15 +1,22 @@
 {
-  "name": "بسام الذكي",
-  "short_name": "بسام",
-  "lang": "ar",
-  "dir": "rtl",
-  "start_url": "/?source=pwa",
-  "scope": "/",
+  "name": "Bassam App",
+  "short_name": "Bassam",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#0b0f19",
-  "theme_color": "#7c3aed",
+  "theme_color": "#0b0f19",
+  "description": "بسام الذكي – إشعارات فورية للمباريات والأحداث",
   "icons": [
-    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
-  ]
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "gcm_sender_id": "482941778795"
 }
