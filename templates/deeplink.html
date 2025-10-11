@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>فتح البث المباشر</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Tahoma,Arial;display:flex;min-height:100vh;align-items:center;justify-content:center;background:#0b0f19;color:#fff}
+    .card{max-width:640px;background:#111827;border:1px solid #1f2937;border-radius:16px;padding:20px}
+    .btn{display:inline-block;margin:6px 4px;padding:12px 16px;border-radius:10px;background:#2563eb;color:#fff;text-decoration:none}
+    .sub{opacity:.8}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>جاري فتح القناة…</h2>
+    <p class="sub">المباراة: <b id="m">{{ mat or '' }}</b></p>
+    <div>
+      <a id="yacine" class="btn" href="#">افتح في ياسين</a>
+      <a id="general" class="btn" href="#">افتح في جنرال</a>
+      <a class="btn" href="{{ fallback }}">العودة للموقع</a>
+    </div>
+  </div>
+<script>
+(function(){
+  const q = new URLSearchParams(location.search);
+  const match = q.get('match') || '';
+  const yintent = "intent://open?match="+encodeURIComponent(match)+"#Intent;scheme={{ yacine_scheme }};package={{ yacine_pkg }};end";
+  const gintent = "intent://open?match="+encodeURIComponent(match)+"#Intent;scheme={{ general_scheme }};package={{ general_pkg }};end";
+  document.getElementById('yacine').href = yintent;
+  document.getElementById('general').href = gintent;
+  setTimeout(()=>{ window.location.href = yintent; }, 300);
+})();
+</script>
+</body>
+</html>
