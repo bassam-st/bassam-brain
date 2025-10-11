@@ -29,13 +29,6 @@
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
   </section>
 
-  <!-- بطاقة إجابة الذكاء (عبر /api/ask) -->
-  <section class="card" id="aiCard" style="display:none">
-    <h3>إجابة الذكاء</h3>
-    <div id="aiAnswer" class="summary expanded"></div>
-    <div id="aiSources" class="results" style="margin-top:10px"></div>
-  </section>
-
   {% if bullets %}
   <section class="card">
     <h3>ملخّص سريع</h3>
@@ -97,10 +90,10 @@
     <p>© Bassam AI 2025 • <a href="/admin">لوحة الإدارة</a></p>
   </footer>
 
-  <!-- زر تثبيت PWA -->
+  <!-- زر تثبيت التطبيق -->
   <button id="installBtn" class="install-btn" style="display:none">📱 تثبيت تطبيق بسام الذكي</button>
 
-  <!-- جافاسكربت -->
+  <!-- سكربت -->
   <script src="/static/app.js"></script>
 </body>
 </html>
