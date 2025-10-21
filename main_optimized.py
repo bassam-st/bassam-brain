@@ -1,6 +1,11 @@
-# main_optimized.py — Bassam Brain (FastAPI, SAFE SEARCH OPTIMIZED)
-# تحسينات آمنة: بحث متوازي (Google Serper + DuckDuckGo) + كاش SQLite + تطبيع عربي
-# لا تغيير في واجهاتك أو منطق النواة/الإشعارات/لوحة الإدارة
+# main_optimized.py — Bassam Brain Optimized+ v1.0
+# تحسينات آمنة:
+# - بحث متوازي: Google(Serper) + DuckDuckGo + Bing + Wikipedia + News
+# - كاش SQLite لنتائج البحث
+# - جلب نص الصفحة الفعلي لأفضل الروابط (readability + bs4) ثم تلخيص
+# - إعادة ترتيب النتائج (Re-Rank) بحسب صلة العنوان/الوصف بالسؤال
+# - فلاغات تشغيل عبر متغيّرات بيئة
+# لا تغيير في المسارات أو واجهاتك العامة — آمن للرجوع إلى main.py في أي وقت
 
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, time, asyncio
 import datetime as dt
@@ -26,6 +31,17 @@ from zoneinfo import ZoneInfo
 # OpenAI (اختياري)
 from openai import OpenAI
 
+# (اختياري) جلب نص الصفحة — إن لم تتوفر المكتبات سيُتخطى الجلب تلقائيًا
+USE_READABILITY = True
+try:
+    from bs4 import BeautifulSoup
+    from readability import Document
+except Exception:
+    USE_READABILITY = False
+
+# ----------------------------- تعريف نسخة
+APP_VARIANT = "optimized-plus-1.0"
+
 # ----------------------------- مسارات
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -48,6 +64,11 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
+
+# محركات إضافية
+BING_API_KEY = os.getenv("BING_API_KEY", "").strip()
+USE_WIKI = os.getenv("USE_WIKI", "1") == "1"
+USE_NEWS = os.getenv("USE_NEWS", "1") == "1"
 
 # OpenAI (احتياطي)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -116,7 +137,7 @@ LEAGUE_NAME_BY_ID = {
     "4790": "UEFA Champions League",
 }
 
-# ============================== قاعدة البيانات + كاش البحث (جديد)
+# ============================== قاعدة البيانات + كاش البحث
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -138,7 +159,6 @@ def init_db():
             );
             """
         )
-        # 🔧 جديد: كاش نتائج البحث (صلاحية بالدقائق)
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS cache_search (
@@ -150,7 +170,7 @@ def init_db():
         )
 init_db()
 
-SEARCH_TTL_MIN = int(os.getenv("SEARCH_TTL_MIN", "12"))  # صلاحية الكاش بالدقائق
+SEARCH_TTL_MIN = int(os.getenv("SEARCH_TTL_MIN", "15"))  # مدة الكاش بالدقائق
 
 def cache_get(q: str) -> Optional[Dict]:
     try:
@@ -199,7 +219,6 @@ def normalize_ar(text: str) -> str:
     t = t.replace("ى","ي").replace("ة","ه")
     return t
 
-# 🔧 جديد: تطبيع أوسع قبل البحث (يحسن المطابقة)
 def normalize_query(q: str) -> str:
     q = (q or "").strip()
     q = re.sub(r"[ًٌٍَُِّْ]", "", q)
@@ -245,16 +264,18 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(cleaned) >= max_items: break
     return cleaned
 
-# ============================== البحث: Serper + DuckDuckGo (متوازي) + كاش
+# ============================== مزوّدات البحث
+
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     if not SERPER_API_KEY:
-        raise RuntimeError("No SERPER_API_KEY configured")
+        return []
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
     payload = {"q": q, "num": num, "hl": "ar"}
-    async with httpx.AsyncClient(timeout=25) as client_httpx:
-        r = await client_httpx.post(url, headers=headers, json=payload)
-        r.raise_for_status(); data = r.json()
+    async with httpx.AsyncClient(timeout=25) as ax:
+        r = await ax.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
     out = []
     for it in (data.get("organic", []) or [])[:num]:
         out.append({"title": it.get("title"), "link": it.get("link"),
@@ -268,6 +289,47 @@ def search_duckduckgo(q: str, num: int = 6) -> List[Dict]:
             out.append({"title": r.get("title"),
                         "link": r.get("href") or r.get("url"),
                         "snippet": r.get("body"), "source": "DuckDuckGo"})
+            if len(out) >= num: break
+    return out
+
+async def search_bing(q: str, num: int = 6) -> List[Dict]:
+    if not BING_API_KEY:
+        return []
+    url = "https://api.bing.microsoft.com/v7.0/search"
+    headers = {"Ocp-Apim-Subscription-Key": BING_API_KEY}
+    params = {"q": q, "mkt": "ar-SA", "count": num}
+    async with httpx.AsyncClient(timeout=20) as ax:
+        r = await ax.get(url, headers=headers, params=params)
+        r.raise_for_status()
+        data = r.json()
+    out = []
+    for it in (data.get("webPages", {}).get("value") or [])[:num]:
+        out.append({"title": it.get("name"), "link": it.get("url"),
+                    "snippet": it.get("snippet"), "source": "Bing"})
+    return out
+
+async def search_wikipedia(q: str, num: int = 4) -> List[Dict]:
+    if not USE_WIKI:
+        return []
+    url = "https://ar.wikipedia.org/w/api.php"
+    params = {"action":"opensearch","search":q,"limit":num,"namespace":"0","format":"json"}
+    async with httpx.AsyncClient(timeout=15) as ax:
+        r = await ax.get(url, params=params)
+        r.raise_for_status()
+        _, titles, descs, links = r.json()
+    out = []
+    for t,d,l in zip(titles,descs,links):
+        out.append({"title": t, "link": l, "snippet": d, "source": "Wikipedia"})
+    return out
+
+async def search_news(q: str, num: int = 4) -> List[Dict]:
+    if not USE_NEWS:
+        return []
+    out = []
+    with DDGS() as ddgs:
+        for it in ddgs.news(q, region="xa-ar", max_results=num):
+            out.append({"title": it.get("title"), "link": it.get("url"),
+                        "snippet": it.get("excerpt"), "source": "News"})
             if len(out) >= num: break
     return out
 
@@ -291,48 +353,80 @@ def _dedup_results(items: List[Dict], max_items: int) -> List[Dict]:
             break
     return out
 
-async def smart_search(q: str, num: int = 6) -> Dict:
-    q = normalize_query((q or ""))
-    # 1) كاش أولًا
-    cached = cache_get(q)
+def _score(r: Dict, q_tokens: List[str]) -> float:
+    title = (r.get("title") or "").lower()
+    snip  = (r.get("snippet") or "").lower()
+    s = 0.0
+    for t in q_tokens:
+        if t in title: s += 2.5
+        if t in snip:  s += 1.0
+    # تعزيز ويكيبيديا لأسئلة "من هو/ما هي"
+    if any(x in " ".join(q_tokens) for x in ["من", "هو", "هي"]) and "wikipedia" in (r.get("link") or "").lower():
+        s += 1.2
+    return s
+
+def _rerank(items: List[Dict], q: str) -> List[Dict]:
+    toks = q.lower().split()
+    scored = [( _score(r, toks), r) for r in items]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored]
+
+async def _fetch_page_text(url: str) -> str:
+    if not USE_READABILITY:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent":"Mozilla/5.0"}) as ax:
+            r = await ax.get(url, follow_redirects=True)
+        html = r.text
+        doc = Document(html)
+        cleaned = doc.summary()
+        soup = BeautifulSoup(cleaned, "lxml")
+        text = soup.get_text(separator=" ", strip=True)
+        return re.sub(r"\s+", " ", text)[:3000]  # قص 3KB
+    except Exception:
+        return ""
+
+# ============================== البحث المتوازي + الكاش + جلب نص الصفحة
+async def smart_search(q: str, num: int = 8) -> Dict:
+    q_norm = normalize_query((q or ""))
+    # كاش أولًا
+    cached = cache_get(q_norm)
     if cached:
         return cached
     try:
-        used: List[str] = []
-        results: List[Dict] = []
+        tasks = [
+            asyncio.create_task(search_google_serper(q_norm, num)),
+            asyncio.create_task(asyncio.to_thread(search_duckduckgo, q_norm, num)),
+            asyncio.create_task(search_bing(q_norm, num)),
+            asyncio.create_task(search_wikipedia(q_norm, 4)),
+            asyncio.create_task(search_news(q_norm, 4)),
+        ]
+        results_sets = await asyncio.gather(*tasks, return_exceptions=True)
+        results, used = [], []
+        providers = ["Google","DuckDuckGo","Bing","Wikipedia","News"]
+        for provider, rs in zip(providers, results_sets):
+            if isinstance(rs, Exception) or not rs:
+                continue
+            for it in rs:
+                it["source"] = it.get("source") or provider
+            results += rs
+            used.append(provider)
 
-        async def _serper():
-            try:
-                if not SERPER_API_KEY:
-                    return []
-                rs = await search_google_serper(q, num)
-                for it in rs: it["source"] = "Google"
-                return rs
-            except Exception:
-                return []
+        # إعادة ترتيب مبدئية قبل الدمج
+        prelim = _rerank(results, q_norm)
+        merged = _dedup_results(prelim, max_items=max(num, 8))
 
-        async def _ddg():
-            try:
-                rs = await asyncio.to_thread(search_duckduckgo, q, num)
-                for it in rs: it["source"] = "DuckDuckGo"
-                return rs
-            except Exception:
-                return []
+        # جلب نص أول 3-4 صفحات لو متاح
+        page_links = [r["link"] for r in merged[:4]]
+        if page_links and USE_READABILITY:
+            pages = await asyncio.gather(*[asyncio.create_task(_fetch_page_text(u)) for u in page_links])
+        else:
+            pages = []
 
-        # 2) تشغيل متوازي
-        serper_task = asyncio.create_task(_serper())
-        ddg_task = asyncio.create_task(_ddg())
-        sr, dr = await asyncio.gather(serper_task, ddg_task)
-
-        if sr: used.append("Google");     results += sr
-        if dr: used.append("DuckDuckGo"); results += dr
-
-        merged = _dedup_results(results, max_items=num)
-        bullets = make_bullets([r.get("snippet") for r in merged], max_items=8)
+        bullets = make_bullets(pages + [r.get("snippet") for r in merged], max_items=8)
         payload = {"ok": True, "used": "+".join(used) if used else None,
                    "bullets": bullets, "results": merged}
-        # 3) تخزين في الكاش
-        cache_set(q, payload)
+        cache_set(q_norm, payload)
         return payload
     except Exception as e:
         traceback.print_exc()
@@ -346,6 +440,10 @@ def home(request: Request):
 @app.get("/healthz")
 def health():
     return {"ok": True}
+
+@app.get("/version")
+def version():
+    return {"variant": APP_VARIANT}
 
 # ============================== بحث نصي
 @app.post("/search", response_class=HTMLResponse)
@@ -400,7 +498,8 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         if ext not in ["jpg", "jpeg", "png", "webp", "gif"]: ext = "jpg"
         filename = f"{uuid.uuid4().hex}.{ext}"
         save_path = os.path.join(UPLOADS_DIR, filename)
-        with open(save_path, "wb") as f:  f.write(await file.read())
+        with open(save_path, "wb") as f:
+            f.write(await file.read())
 
         public_base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
         image_url = f"{public_base}/uploads/{filename}"
@@ -471,7 +570,7 @@ async def api_ask(request: Request):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
 
-        # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
+        # 1) المحلي أولاً
         local_first = (USE_LOCAL_FIRST == "1") or (not client)
         if local_first:
             local = await ask_local_llm(q_raw, context_lines)
@@ -481,7 +580,6 @@ async def api_ask(request: Request):
                 bullets = make_bullets([answer], max_items=8)
                 return JSONResponse({"ok": True, "engine_used": "Local",
                                      "answer": answer, "bullets": bullets, "sources": sources})
-            # لو فشل المحلي ولم يوجد OpenAI -> نرجّع ملخص البحث
             if not client:
                 return JSONResponse({
                     "ok": True, "engine_used": search.get("used"),
@@ -489,7 +587,7 @@ async def api_ask(request: Request):
                     "bullets": search.get("bullets", []), "sources": sources
                 })
 
-        # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
+        # 2) OpenAI كاحتياط
         if client:
             system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
                           "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
@@ -506,13 +604,11 @@ async def api_ask(request: Request):
                           {"role": "user", "content": user_msg}],
                 temperature=0.3, max_tokens=600,
             )
-            # دعم كلا واجهتي openai
             choice = getattr(resp, "choices", [])[0]
             msg = getattr(choice, "message", None) or getattr(choice, "delta", None) or {}
             answer = (getattr(msg, "content", None) or (isinstance(msg, dict) and msg.get("content")) or "").strip()
 
             bullets = make_bullets([answer], max_items=8)
-
             log_event("ask", ip, ua, query=q_raw, engine_used=f"OpenAI:{LLM_MODEL}")
             return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
                                  "answer": answer, "bullets": bullets, "sources": sources})
