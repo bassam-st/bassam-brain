@@ -11,3 +11,4 @@ openai==1.44.0
 apscheduler==3.10.4
 diskcache==5.6.3
 python-dotenv==1.0.1
+gunicorn==21.2.0
