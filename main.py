@@ -1,5 +1,5 @@
 # main.py — Bassam Brain (FastAPI)
-# بحث + رفع صور + GPT API + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
+# بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
 # لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر
 
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
@@ -43,20 +43,63 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# ----------------------------- مفاتيح
+# ----------------------------- مفاتيح/إعدادات عامة
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 
+# OpenAI (احتياطي)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# ----------------------------- OneSignal + الدوريات + التوقيت + باكدجات
-ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()  # 81c7fcd0-8dbe-4486-9f9e-7a80e461f5d1
-ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()  # os_v2_app_...
-TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()   # توقيت مكة
+# ----------------------------- الربط مع النموذج المحلي (llama-server / vLLM المتوافق)
+# ملاحظة: على Render لابد يكون LOCAL_LLM_BASE عنوانًا عامًا https (مثلاً من Cloudflared/Tailscale/VPS)
+LOCAL_LLM_BASE = os.getenv("LOCAL_LLM_BASE", "").rstrip("/")   # مثال: https://your-tunnel-url.trycloudflare.com
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "local").strip()
+USE_LOCAL_FIRST = os.getenv("USE_LOCAL_FIRST", "1").strip()  # "1" جرّب المحلي أولًا، "0" العكس
+
+async def ask_local_llm(user_q: str, context_lines: List[str], temperature: float = 0.3, max_tokens: int = 600) -> Dict:
+    """
+    إرسال سؤال إلى خادم LLaMA/vLLM المتوافق مع /v1/chat/completions
+    يرجع dict: {"ok": True/False, "answer": "...", "engine_used": "Local", "error": "..."}
+    """
+    if not LOCAL_LLM_BASE:
+        return {"ok": False, "error": "LOCAL_LLM_BASE not configured"}
+    try:
+        system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
+                      "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
+                      "إن لم تكن واثقًا قل لا أعلم.")
+        user_msg = f"السؤال:\n{user_q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
+
+        payload = {
+            "model": LOCAL_LLM_MODEL or "local",
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            "temperature": float(temperature),
+            "max_tokens": int(max_tokens),
+        }
+
+        async with httpx.AsyncClient(timeout=120) as ax:
+            r = await ax.post(f"{LOCAL_LLM_BASE}/v1/chat/completions",
+                              headers={"Content-Type": "application/json"},
+                              json=payload)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"{r.status_code}: {r.text}"}
+
+        data = r.json()
+        answer = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
+        return {"ok": True, "answer": answer.strip(), "engine_used": "Local"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# ----------------------------- OneSignal + الدوريات + التوقيت
+ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
+ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()
 TZ = ZoneInfo(TIMEZONE)
 
 LEAGUE_IDS = [x.strip() for x in os.getenv(
@@ -289,7 +332,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
-# ============================== API: ردّ الذكاء باستخدام GPT (اختياري)
+# ============================== API: ردّ الذكاء (محلي أولاً ثم OpenAI كاحتياط)
 @app.post("/api/ask")
 async def api_ask(request: Request):
     try:
@@ -298,6 +341,7 @@ async def api_ask(request: Request):
         if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
+        # ردود ثابتة
         if is_intro_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
@@ -325,6 +369,7 @@ async def api_ask(request: Request):
                                  "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
                                  "sources": []})
 
+        # نتائج بحث مختصرة لاستخدامها كـ context
         search = await smart_search(q, num=6)
         sources = search.get("results", [])
         context_lines = []
@@ -334,32 +379,53 @@ async def api_ask(request: Request):
             snippet = (r.get("snippet") or "").strip()
             context_lines.append(f"{i}. {title}\n{snippet}\n{link}")
 
-        if not client:
-            return JSONResponse({
-                "ok": True, "engine_used": search.get("used"),
-                "answer": "⚠️ لم يتم إعداد مفتاح OpenAI، لذا أعرض لك ملخّصًا من النتائج فقط.",
-                "bullets": search.get("bullets", []), "sources": sources
-            })
-
-        system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-                      "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
-        user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
-
-        resp = client.chat.completions.create(
-            model=LLM_MODEL or "gpt-5-mini",
-            messages=[{"role": "system", "content": system_msg},
-                      {"role": "user", "content": user_msg}],
-            temperature=0.3, max_tokens=600,
-        )
-        answer = (resp.choices[0].message.content or "").strip()
-        bullets = make_bullets([answer], max_items=8)
-
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
-        log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
 
-        return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
-                             "answer": answer, "bullets": bullets, "sources": sources})
+        # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
+        local_first = (USE_LOCAL_FIRST == "1") or (not client)
+        if local_first:
+            local = await ask_local_llm(q, context_lines)
+            if local.get("ok"):
+                log_event("ask", ip, ua, query=q, engine_used="Local")
+                answer = local["answer"]
+                bullets = make_bullets([answer], max_items=8)
+                return JSONResponse({"ok": True, "engine_used": "Local",
+                                     "answer": answer, "bullets": bullets, "sources": sources})
+            # لو فشل المحلي ولم يوجد OpenAI -> نرجّع ملخص البحث
+            if not client:
+                return JSONResponse({
+                    "ok": True, "engine_used": search.get("used"),
+                    "answer": "⚠️ تعذر الاتصال بالنموذج المحلي، أعرض لك ملخصًا من النتائج.",
+                    "bullets": search.get("bullets", []), "sources": sources
+                })
+
+        # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
+        if client:
+            system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
+                          "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
+            user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
+
+            resp = client.chat.completions.create(
+                model=LLM_MODEL or "gpt-5-mini",
+                messages=[{"role": "system", "content": system_msg},
+                          {"role": "user", "content": user_msg}],
+                temperature=0.3, max_tokens=600,
+            )
+            answer = (resp.choices[0].message.content or "").strip()
+            bullets = make_bullets([answer], max_items=8)
+
+            log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
+            return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
+                                 "answer": answer, "bullets": bullets, "sources": sources})
+
+        # 3) لا محلي ولا OpenAI
+        return JSONResponse({
+            "ok": True, "engine_used": search.get("used"),
+            "answer": "⚠️ لا يوجد اتصال بنموذج محلي ولا OpenAI، أعرض ملخصًا من النتائج.",
+            "bullets": search.get("bullets", []), "sources": sources
+        })
+
     except Exception as e:
         traceback.print_exc();  return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -522,7 +588,6 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
         "contents": {"ar": body, "en": body},
         "url": full_url,
     }
-    # v16 key = Bearer
     headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}",
                "Content-Type": "application/json; charset=utf-8"}
     try:
@@ -559,10 +624,8 @@ def job_half_hour_and_kickoff():
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    # ⏰ 15:00 يوميًا مكة
-    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))
-    # ⏱️ كل 5 دقائق لمراقبة -30 دقيقة والبداية
-    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
+    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))   # ⏰ 15:00 يوميًا مكة
+    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))  # ⏱️ كل 5 دقائق
     sch.start()
 
 @app.on_event("startup")
