@@ -1,13 +1,7 @@
-# main_optimized.py — Bassam Brain Optimized+ v1.0
-# تحسينات آمنة:
-# - بحث متوازي: Google(Serper) + DuckDuckGo + Bing + Wikipedia + News
-# - كاش SQLite لنتائج البحث
-# - جلب نص الصفحة الفعلي لأفضل الروابط (readability + bs4) ثم تلخيص
-# - إعادة ترتيب النتائج (Re-Rank) بحسب صلة العنوان/الوصف بالسؤال
-# - فلاغات تشغيل عبر متغيّرات بيئة
-# لا تغيير في المسارات أو واجهاتك العامة — آمن للرجوع إلى main.py في أي وقت
+# main_optimized.py — Bassam Brain (FastAPI, SmartNLP light)
+# بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink + SmartNLP (بدون نموذج ثقيل)
 
-import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, time, asyncio
+import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, asyncio
 import datetime as dt
 from typing import Optional, List, Dict
 from urllib.parse import quote
@@ -31,16 +25,115 @@ from zoneinfo import ZoneInfo
 # OpenAI (اختياري)
 from openai import OpenAI
 
-# (اختياري) جلب نص الصفحة — إن لم تتوفر المكتبات سيُتخطى الجلب تلقائيًا
-USE_READABILITY = True
-try:
-    from bs4 import BeautifulSoup
-    from readability import Document
-except Exception:
-    USE_READABILITY = False
+# ===== SmartNLP: عقل لغوي خفيف لبسّام (بدون نموذج ثقيل)
+# تعتمد على مكتبتين خفيفتين: langdetect + rapidfuzz
+from langdetect import detect, DetectorFactory
+from rapidfuzz import fuzz
 
-# ----------------------------- تعريف نسخة
-APP_VARIANT = "optimized-plus-1.0"
+DetectorFactory.seed = 0
+
+AR_STOPWORDS = {
+    "في","من","على","عن","إلى","الى","ما","ماذا","هو","هي","هم","هن","هذا","هذه",
+    "ذلك","تلك","انا","أنت","انت","أن","ان","كان","كانت","يكون","هل","قد","تم","ثم",
+    "او","أو","و","مع","لقد","كيف","اين","أين","كم","لماذا","ليش","شو","ايش"
+}
+
+AR_SYNONYMS = {
+    "وين": "أين", "ليش": "لماذا", "شو": "ما", "ايش": "ما",
+    "الجوال": "الهاتف", "الجوالات": "الهواتف",
+    "السعودية": "المملكة العربية السعودية",
+}
+
+KB_EN2AR = str.maketrans({
+    'a':'ش','b':'لا','c':'ؤ','d':'ي','e':'ث','f':'ب','g':'ل','h':'ا','i':'ه','j':'ت',
+    'k':'ن','l':'م','m':'ة','n':'ى','o':'خ','p':'ح','q':'ض','r':'ق','s':'س','t':'ف',
+    'u':'ع','v':'ر','w':'ص','x':'ء','y':'غ','z':'ئ'
+})
+
+def normalize_ar_strict(t: str) -> str:
+    t = (t or "").strip()
+    t = re.sub(r"[ًٌٍَُِّْـ]", "", t)  # إزالة التشكيل والمد
+    t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ى","ي").replace("ة","ه")
+    t = re.sub(r"[^\w\s\u0600-\u06FF]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+def unify_digits(t: str) -> str:
+    trans = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    return (t or "").translate(trans)
+
+def fix_keyboard_en2ar_if_needed(t: str) -> str:
+    if not t: return t
+    raw = t.lower()
+    if re.fullmatch(r"[a-z\s\-\.\,\!\?]{3,}", raw) and len(set(raw) - set("asdfghjkl; qwertyuiopzxcvbnm-.,!? ")) < 8:
+        return raw.translate(KB_EN2AR)
+    return t
+
+def detect_lang_light(t: str) -> str:
+    try:
+        code = detect((t or "").strip())
+        return (code or "ar").split("-")[0]
+    except Exception:
+        return "ar"
+
+def drop_stopwords_ar(words: List[str]) -> List[str]:
+    return [w for w in words if w not in AR_STOPWORDS and len(w) > 1]
+
+def rewrite_query_ar(q: str) -> str:
+    """إعادة كتابة للسؤال العربي ليصبح أنسب للبحث."""
+    q0 = unify_digits(normalize_ar_strict(fix_keyboard_en2ar_if_needed(q)))
+    for k, v in AR_SYNONYMS.items():
+        q0 = re.sub(rf"\b{k}\b", v, q0)
+    toks = drop_stopwords_ar(q0.split())
+    if any(w in toks for w in ["موقع","تقع","اين","أين"]):
+        obj = " ".join([w for w in toks if w not in ["موقع","تقع","اين","أين"]])
+        if obj:
+            return f"ما هو الموقع الجغرافي ل{obj}"
+    return " ".join(toks) if toks else q0
+
+INTENT_PATTERNS = {
+    "greet": ["مرحبا", "السلام عليكم", "هلا", "hi", "hello"],
+    "intro": ["من انت", "مين انت", "من تكون", "عرف بنفسك", "من هو المساعد"],
+    "about_bassam": ["من هو بسام", "من صنع التطبيق", "مين المطور", "بسام الشتيمي"],
+    "privacy_personal": ["اسم زوجة", "اسم ام", "من هي زوجة", "من هي ام", "والدة بسام", "زوجة بسام"],
+    "thanks": ["شكرا", "thx", "thanks", "مشكور"],
+}
+
+def fuzzy_intent(q: str) -> Optional[str]:
+    base = normalize_ar_strict(q)
+    candidates = []
+    for intent, samples in INTENT_PATTERNS.items():
+        score = max(fuzz.token_set_ratio(base, s) for s in samples)
+        candidates.append((intent, score))
+    intent, score = max(candidates, key=lambda x: x[1])
+    return intent if score >= 75 else None
+
+def smart_preprocess(q: str) -> Dict:
+    """يرجع:
+       {"lang": "ar|en|..", "intent": str|None, "query_rewritten": str, "handled": {"answer": "..."}|None}
+    """
+    lang = detect_lang_light(q)
+    if lang == "ar":
+        rewritten = rewrite_query_ar(q)
+        intent = fuzzy_intent(q)
+        if intent == "greet":
+            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
+                    "handled": {"answer": "أهلاً وسهلاً! كيف أقدر أساعدك؟"}}
+        if intent == "intro":
+            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
+                    "handled": {"answer": "أنا بسّام مساعدك الذكي للبحث والتلخيص. اكتب سؤالك ودعني أتكفّل بالباقي."}}
+        if intent == "about_bassam":
+            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
+                    "handled": {"answer": "بسام الشتيمي هو مطوّر هذا التطبيق."}}
+        if intent == "privacy_personal":
+            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
+                    "handled": {"answer": "حفاظًا على الخصوصية لا نجيب عن الأسئلة الشخصية. استخدم التطبيق للأسئلة العامة فقط."}}
+        if intent == "thanks":
+            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
+                    "handled": {"answer": "على الرحب والسعة! 👌"}}
+        return {"lang": lang, "intent": intent, "query_rewritten": rewritten, "handled": None}
+    return {"lang": lang, "intent": None, "query_rewritten": (q or "").strip(), "handled": None}
+
 
 # ----------------------------- مسارات
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,11 +158,6 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUB
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 
-# محركات إضافية
-BING_API_KEY = os.getenv("BING_API_KEY", "").strip()
-USE_WIKI = os.getenv("USE_WIKI", "1") == "1"
-USE_NEWS = os.getenv("USE_NEWS", "1") == "1"
-
 # OpenAI (احتياطي)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
@@ -84,9 +172,11 @@ async def ask_local_llm(user_q: str, context_lines: List[str], temperature: floa
     if not LOCAL_LLM_BASE:
         return {"ok": False, "error": "LOCAL_LLM_BASE not configured"}
     try:
-        system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-                      "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
-                      "إن لم تكن واثقًا قل لا أعلم.")
+        system_msg = (
+            "You are a helpful assistant. ALWAYS respond in the SAME language as the user's question. "
+            "كن موجزًا وواضحًا، واستخدم نقاطًا مختصرة عند الحاجة. "
+            "اعتمد على المعلومات التالية من نتائج البحث كمراجع، وإن لم تكن واثقًا قل: لا أعلم."
+        )
         user_msg = f"السؤال:\n{user_q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
 
         payload = {
@@ -137,7 +227,7 @@ LEAGUE_NAME_BY_ID = {
     "4790": "UEFA Champions League",
 }
 
-# ============================== قاعدة البيانات + كاش البحث
+# ============================== قاعدة البيانات
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -159,41 +249,7 @@ def init_db():
             );
             """
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cache_search (
-                q TEXT PRIMARY KEY,
-                ts INTEGER NOT NULL,
-                payload TEXT NOT NULL
-            );
-            """
-        )
 init_db()
-
-SEARCH_TTL_MIN = int(os.getenv("SEARCH_TTL_MIN", "15"))  # مدة الكاش بالدقائق
-
-def cache_get(q: str) -> Optional[Dict]:
-    try:
-        with db() as con:
-            row = con.execute("SELECT ts, payload FROM cache_search WHERE q = ?", (q,)).fetchone()
-        if not row:
-            return None
-        age_min = (int(time.time()) - int(row["ts"])) / 60.0
-        if age_min > SEARCH_TTL_MIN:
-            return None
-        return json.loads(row["payload"])
-    except Exception:
-        return None
-
-def cache_set(q: str, payload: Dict) -> None:
-    try:
-        with db() as con:
-            con.execute(
-                "REPLACE INTO cache_search (q, ts, payload) VALUES (?, ?, ?)",
-                (q, int(time.time()), json.dumps(payload, ensure_ascii=False))
-            )
-    except Exception:
-        pass
 
 def log_event(event_type: str, ip: str, ua: str, query: Optional[str]=None,
               file_name: Optional[str]=None, engine_used: Optional[str]=None):
@@ -218,14 +274,6 @@ def normalize_ar(text: str) -> str:
     t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا")
     t = t.replace("ى","ي").replace("ة","ه")
     return t
-
-def normalize_query(q: str) -> str:
-    q = (q or "").strip()
-    q = re.sub(r"[ًٌٍَُِّْ]", "", q)
-    q = q.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ة","ه").replace("ى","ي")
-    q = re.sub(r"[^\w\s\u0600-\u06FF]", " ", q)
-    q = re.sub(r"\s+", " ", q).strip()
-    return q
 
 INTRO_PATTERNS = [r"من انت", r"من أنت", r"مين انت", r"من تكون", r"من هو المساعد", r"تعرف بنفسك", r"عرف بنفسك"]
 BASSAM_PATTERNS = [
@@ -264,18 +312,16 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(cleaned) >= max_items: break
     return cleaned
 
-# ============================== مزوّدات البحث
-
+# ============================== البحث (Serper ثم DuckDuckGo)
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     if not SERPER_API_KEY:
-        return []
+        raise RuntimeError("No SERPER_API_KEY configured")
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
     payload = {"q": q, "num": num, "hl": "ar"}
-    async with httpx.AsyncClient(timeout=25) as ax:
-        r = await ax.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
+    async with httpx.AsyncClient(timeout=25) as client_httpx:
+        r = await client_httpx.post(url, headers=headers, json=payload)
+        r.raise_for_status(); data = r.json()
     out = []
     for it in (data.get("organic", []) or [])[:num]:
         out.append({"title": it.get("title"), "link": it.get("link"),
@@ -292,145 +338,21 @@ def search_duckduckgo(q: str, num: int = 6) -> List[Dict]:
             if len(out) >= num: break
     return out
 
-async def search_bing(q: str, num: int = 6) -> List[Dict]:
-    if not BING_API_KEY:
-        return []
-    url = "https://api.bing.microsoft.com/v7.0/search"
-    headers = {"Ocp-Apim-Subscription-Key": BING_API_KEY}
-    params = {"q": q, "mkt": "ar-SA", "count": num}
-    async with httpx.AsyncClient(timeout=20) as ax:
-        r = await ax.get(url, headers=headers, params=params)
-        r.raise_for_status()
-        data = r.json()
-    out = []
-    for it in (data.get("webPages", {}).get("value") or [])[:num]:
-        out.append({"title": it.get("name"), "link": it.get("url"),
-                    "snippet": it.get("snippet"), "source": "Bing"})
-    return out
-
-async def search_wikipedia(q: str, num: int = 4) -> List[Dict]:
-    if not USE_WIKI:
-        return []
-    url = "https://ar.wikipedia.org/w/api.php"
-    params = {"action":"opensearch","search":q,"limit":num,"namespace":"0","format":"json"}
-    async with httpx.AsyncClient(timeout=15) as ax:
-        r = await ax.get(url, params=params)
-        r.raise_for_status()
-        _, titles, descs, links = r.json()
-    out = []
-    for t,d,l in zip(titles,descs,links):
-        out.append({"title": t, "link": l, "snippet": d, "source": "Wikipedia"})
-    return out
-
-async def search_news(q: str, num: int = 4) -> List[Dict]:
-    if not USE_NEWS:
-        return []
-    out = []
-    with DDGS() as ddgs:
-        for it in ddgs.news(q, region="xa-ar", max_results=num):
-            out.append({"title": it.get("title"), "link": it.get("url"),
-                        "snippet": it.get("excerpt"), "source": "News"})
-            if len(out) >= num: break
-    return out
-
-def _dedup_results(items: List[Dict], max_items: int) -> List[Dict]:
-    seen = set(); out = []
-    for r in items:
-        link = (r.get("link") or r.get("url") or "").strip()
-        if not link:
-            continue
-        key = link.split("#")[0].rstrip("/")
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({
-            "title": (r.get("title") or link).strip(),
-            "link": link,
-            "snippet": (r.get("snippet") or r.get("body") or "").strip(),
-            "source": r.get("source") or "web"
-        })
-        if len(out) >= max_items:
-            break
-    return out
-
-def _score(r: Dict, q_tokens: List[str]) -> float:
-    title = (r.get("title") or "").lower()
-    snip  = (r.get("snippet") or "").lower()
-    s = 0.0
-    for t in q_tokens:
-        if t in title: s += 2.5
-        if t in snip:  s += 1.0
-    # تعزيز ويكيبيديا لأسئلة "من هو/ما هي"
-    if any(x in " ".join(q_tokens) for x in ["من", "هو", "هي"]) and "wikipedia" in (r.get("link") or "").lower():
-        s += 1.2
-    return s
-
-def _rerank(items: List[Dict], q: str) -> List[Dict]:
-    toks = q.lower().split()
-    scored = [( _score(r, toks), r) for r in items]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in scored]
-
-async def _fetch_page_text(url: str) -> str:
-    if not USE_READABILITY:
-        return ""
+async def smart_search(q: str, num: int = 6) -> Dict:
+    q = (q or "").strip()
     try:
-        async with httpx.AsyncClient(timeout=15, headers={"User-Agent":"Mozilla/5.0"}) as ax:
-            r = await ax.get(url, follow_redirects=True)
-        html = r.text
-        doc = Document(html)
-        cleaned = doc.summary()
-        soup = BeautifulSoup(cleaned, "lxml")
-        text = soup.get_text(separator=" ", strip=True)
-        return re.sub(r"\s+", " ", text)[:3000]  # قص 3KB
-    except Exception:
-        return ""
-
-# ============================== البحث المتوازي + الكاش + جلب نص الصفحة
-async def smart_search(q: str, num: int = 8) -> Dict:
-    q_norm = normalize_query((q or ""))
-    # كاش أولًا
-    cached = cache_get(q_norm)
-    if cached:
-        return cached
-    try:
-        tasks = [
-            asyncio.create_task(search_google_serper(q_norm, num)),
-            asyncio.create_task(asyncio.to_thread(search_duckduckgo, q_norm, num)),
-            asyncio.create_task(search_bing(q_norm, num)),
-            asyncio.create_task(search_wikipedia(q_norm, 4)),
-            asyncio.create_task(search_news(q_norm, 4)),
-        ]
-        results_sets = await asyncio.gather(*tasks, return_exceptions=True)
-        results, used = [], []
-        providers = ["Google","DuckDuckGo","Bing","Wikipedia","News"]
-        for provider, rs in zip(providers, results_sets):
-            if isinstance(rs, Exception) or not rs:
-                continue
-            for it in rs:
-                it["source"] = it.get("source") or provider
-            results += rs
-            used.append(provider)
-
-        # إعادة ترتيب مبدئية قبل الدمج
-        prelim = _rerank(results, q_norm)
-        merged = _dedup_results(prelim, max_items=max(num, 8))
-
-        # جلب نص أول 3-4 صفحات لو متاح
-        page_links = [r["link"] for r in merged[:4]]
-        if page_links and USE_READABILITY:
-            pages = await asyncio.gather(*[asyncio.create_task(_fetch_page_text(u)) for u in page_links])
+        used, results = None, []
+        if SERPER_API_KEY:
+            try:
+                results = await search_google_serper(q, num); used = "Google"
+            except Exception:
+                results = search_duckduckgo(q, num); used = "DuckDuckGo"
         else:
-            pages = []
-
-        bullets = make_bullets(pages + [r.get("snippet") for r in merged], max_items=8)
-        payload = {"ok": True, "used": "+".join(used) if used else None,
-                   "bullets": bullets, "results": merged}
-        cache_set(q_norm, payload)
-        return payload
+            results = search_duckduckgo(q, num); used = "DuckDuckGo"
+        bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
+        return {"ok": True, "used": used, "bullets": bullets, "results": results}
     except Exception as e:
-        traceback.print_exc()
-        return {"ok": False, "used": None, "results": [], "error": str(e)}
+        traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
 
 # ============================== صفحات HTML
 @app.get("/", response_class=HTMLResponse)
@@ -441,45 +363,52 @@ def home(request: Request):
 def health():
     return {"ok": True}
 
-@app.get("/version")
-def version():
-    return {"variant": APP_VARIANT}
-
 # ============================== بحث نصي
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
-    q_raw = (q or "").strip()
-    if not q_raw:
+    q = (q or "").strip()
+    if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
-    # تعريفات ثابتة
-    if is_intro_query(q_raw):
+    # SmartNLP قبل أي شيء: إعادة كتابة السؤال وكشف نوايا سريعة
+    pp = smart_preprocess(q)
+    q_for_search = pp["query_rewritten"] or q
+    if pp.get("handled"):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q_raw, engine_used="CANNED_INTRO")
-        ctx = {"request": request, "query": q_raw, "engine_used": "CANNED_INTRO", "results": [], "bullets": [INTRO_ANSWER]}
+        log_event("search", ip, ua, query=q, engine_used="SmartNLP")
+        ctx = {"request": request, "query": q, "engine_used": "SmartNLP",
+               "results": [], "bullets": make_bullets([pp["handled"]["answer"]], max_items=4)}
         return templates.TemplateResponse("index.html", ctx)
 
-    if is_bassam_query(q_raw):
+    # تعريفات ثابتة القديمة (ما زالت تعمل)
+    if is_intro_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q_raw, engine_used="CANNED")
-        ctx = {"request": request, "query": q_raw, "engine_used": "CANNED", "results": [], "bullets": [CANNED_ANSWER]}
+        log_event("search", ip, ua, query=q, engine_used="CANNED_INTRO")
+        ctx = {"request": request, "query": q, "engine_used": "CANNED_INTRO", "results": [], "bullets": [INTRO_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    if is_sensitive_personal_query(q_raw):
+    if is_bassam_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q_raw, engine_used="CANNED_PRIVACY")
-        ctx = {"request": request, "query": q_raw, "engine_used": "CANNED_PRIVACY", "results": [], "bullets": [SENSITIVE_PRIVACY_ANSWER]}
+        log_event("search", ip, ua, query=q, engine_used="CANNED")
+        ctx = {"request": request, "query": q, "engine_used": "CANNED", "results": [], "bullets": [CANNED_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    result = await smart_search(q_raw, num=8)
+    if is_sensitive_personal_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("search", ip, ua, query=q, engine_used="CANNED_PRIVACY")
+        ctx = {"request": request, "query": q, "engine_used": "CANNED_PRIVACY", "results": [], "bullets": [SENSITIVE_PRIVACY_ANSWER]}
+        return templates.TemplateResponse("index.html", ctx)
+
+    result = await smart_search(q_for_search, num=8)
     ip = request.client.host if request.client else "?"
     ua = request.headers.get("user-agent", "?")
-    log_event("search", ip, ua, query=q_raw, engine_used=result.get("used"))
+    log_event("search", ip, ua, query=q, engine_used=result.get("used"))
 
-    ctx = {"request": request, "query": q_raw,
+    ctx = {"request": request, "query": q,
            "engine_used": result.get("used"),
            "results": result.get("results", []),
            "bullets": result.get("bullets", [])}
@@ -498,8 +427,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         if ext not in ["jpg", "jpeg", "png", "webp", "gif"]: ext = "jpg"
         filename = f"{uuid.uuid4().hex}.{ext}"
         save_path = os.path.join(UPLOADS_DIR, filename)
-        with open(save_path, "wb") as f:
-            f.write(await file.read())
+        with open(save_path, "wb") as f:  f.write(await file.read())
 
         public_base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
         image_url = f"{public_base}/uploads/{filename}"
@@ -525,40 +453,52 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 async def api_ask(request: Request):
     try:
         data = await request.json()
-        q_raw = (data.get("q") or "").strip()
-        if not q_raw:
+        q = (data.get("q") or "").strip()
+        if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
-        # ردود ثابتة
-        if is_intro_query(q_raw):
+        # SmartNLP أولاً
+        pp = smart_preprocess(q)
+        q_for_search = pp["query_rewritten"] or q
+        if pp.get("handled"):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q_raw, engine_used="CANNED_INTRO")
+            log_event("ask", ip, ua, query=q, engine_used="SmartNLP")
+            ans = pp["handled"]["answer"]
+            return JSONResponse({"ok": True, "engine_used": "SmartNLP",
+                                 "answer": ans, "bullets": make_bullets([ans], max_items=5),
+                                 "sources": []})
+
+        # ردود ثابتة
+        if is_intro_query(q):
+            ip = request.client.host if request.client else "?"
+            ua = request.headers.get("user-agent", "?")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED_INTRO")
             return JSONResponse({"ok": True, "engine_used": "CANNED_INTRO",
                                  "answer": INTRO_ANSWER,
                                  "bullets": make_bullets([INTRO_ANSWER], max_items=3),
                                  "sources": []})
 
-        if is_bassam_query(q_raw):
+        if is_bassam_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q_raw, engine_used="CANNED")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED")
             return JSONResponse({"ok": True, "engine_used": "CANNED",
                                  "answer": CANNED_ANSWER,
                                  "bullets": make_bullets([CANNED_ANSWER], max_items=4),
                                  "sources": []})
 
-        if is_sensitive_personal_query(q_raw):
+        if is_sensitive_personal_query(q):
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q_raw, engine_used="CANNED_PRIVACY")
+            log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
             return JSONResponse({"ok": True, "engine_used": "CANNED_PRIVACY",
                                  "answer": SENSITIVE_PRIVACY_ANSWER,
                                  "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
                                  "sources": []})
 
         # نتائج بحث مختصرة لاستخدامها كـ context
-        search = await smart_search(q_raw, num=6)
+        search = await smart_search(q_for_search, num=6)
         sources = search.get("results", [])
         context_lines = []
         for i, r in enumerate(sources, start=1):
@@ -570,12 +510,12 @@ async def api_ask(request: Request):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
 
-        # 1) المحلي أولاً
+        # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
         local_first = (USE_LOCAL_FIRST == "1") or (not client)
         if local_first:
-            local = await ask_local_llm(q_raw, context_lines)
+            local = await ask_local_llm(q, context_lines)
             if local.get("ok"):
-                log_event("ask", ip, ua, query=q_raw, engine_used="Local")
+                log_event("ask", ip, ua, query=q, engine_used="Local")
                 answer = local["answer"]
                 bullets = make_bullets([answer], max_items=8)
                 return JSONResponse({"ok": True, "engine_used": "Local",
@@ -587,29 +527,25 @@ async def api_ask(request: Request):
                     "bullets": search.get("bullets", []), "sources": sources
                 })
 
-        # 2) OpenAI كاحتياط
+        # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
         if client:
-            system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-                          "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
-            user_msg = f"السؤال:\n{q_raw}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
+            system_msg = (
+                "You are a helpful assistant. ALWAYS respond in the SAME language as the user's question. "
+                "كن موجزًا وواضحًا، واستخدم نقاطًا مختصرة عند الحاجة. "
+                "اعتمد على المعلومات التالية من نتائج البحث كمراجع، وإن لم تكن واثقًا قل: لا أعلم."
+            )
+            user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
 
-            resp = client.chat_completions.create(
-                model=LLM_MODEL or "gpt-5-mini",
-                messages=[{"role": "system", "content": system_msg},
-                          {"role": "user", "content": user_msg}],
-                temperature=0.3, max_tokens=600,
-            ) if hasattr(client, "chat_completions") else client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model=LLM_MODEL or "gpt-5-mini",
                 messages=[{"role": "system", "content": system_msg},
                           {"role": "user", "content": user_msg}],
                 temperature=0.3, max_tokens=600,
             )
-            choice = getattr(resp, "choices", [])[0]
-            msg = getattr(choice, "message", None) or getattr(choice, "delta", None) or {}
-            answer = (getattr(msg, "content", None) or (isinstance(msg, dict) and msg.get("content")) or "").strip()
-
+            answer = (resp.choices[0].message.content or "").strip()
             bullets = make_bullets([answer], max_items=8)
-            log_event("ask", ip, ua, query=q_raw, engine_used=f"OpenAI:{LLM_MODEL}")
+
+            log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
             return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
                                  "answer": answer, "bullets": bullets, "sources": sources})
 
@@ -816,8 +752,8 @@ def job_half_hour_and_kickoff():
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))   # ⏰ 15:00 يوميًا مكة
-    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))  # ⏱️ كل 5 دقائق
+    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))
+    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
     sch.start()
 
 @app.on_event("startup")
