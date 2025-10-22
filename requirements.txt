@@ -18,3 +18,4 @@ langdetect==1.0.9
 rapidfuzz==3.9.7
 vosk==0.3.45
 moviepy==1.0.3
+yt-dlp==2024.5.27
