@@ -25,10 +25,10 @@
   </form>
 
   {% if video_url %}
-    <video controls autoplay src="{{ video_url }}"></video>
+    <video id="v" controls autoplay src="{{ video_url }}"></video>
 
     <div id="subs" class="subs">
-      <div class="line muted">جاري بدء الترجمة الحية... هذا عرض تجريبي.</div>
+      <div class="line muted">جاري البدء… إذا طال الانتظار قد يتحول للوضع البطيء تلقائيًا.</div>
     </div>
 
     <script>
@@ -57,7 +57,7 @@
             } else if (data.type === 'error') {
               addLine('❌ ' + data.msg, 'error');
             } else if (data.type === 'done') {
-              addLine('✅ اكتملت الترجمة.');
+              addLine('✅ انتهى البث.');
               ev.close();
             }
           } catch (err) {
