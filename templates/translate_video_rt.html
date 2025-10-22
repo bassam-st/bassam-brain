@@ -1,99 +1,182 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🎧 الترجمة الحيّة للفيديو</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>🎧 الترجمة الحية للفيديو</title>
+  <link rel="stylesheet" href="/static/style.css"/>
   <style>
-    body {
-      background-color:#0b0f19;
-      color:#e6e6ff;
-      font-family:system-ui, sans-serif;
-      text-align:center;
-      padding:40px;
-    }
-    h1 {
-      color:#b197fc;
-    }
-    input[type="url"] {
-      width:80%;
-      padding:12px;
-      margin:12px 0;
-      border-radius:12px;
-      border:none;
-      outline:none;
-      background:#121826;
-      color:white;
-      text-align:left;
-    }
-    button {
-      padding:12px 20px;
-      border:none;
-      border-radius:12px;
-      background:#6d5dfc;
-      color:white;
-      font-weight:bold;
-      cursor:pointer;
-    }
-    button:active {
-      transform:scale(0.97);
-    }
-    #resultBox {
-      margin-top:24px;
-      background:#101622;
-      padding:20px;
-      border-radius:16px;
-      white-space:pre-wrap;
-      text-align:right;
-    }
+    body{background:#0b0f19;color:#e6e7ff;font-family:system-ui,sans-serif}
+    .wrap{max-width:860px;margin:28px auto;background:#121826;border-radius:18px;padding:18px}
+    h1{margin:0 0 8px;color:#c4b5fd}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    input[type="url"]{flex:1;min-width:240px;padding:12px 14px;border-radius:12px;border:none;background:#0f1421;color:#fff}
+    button{padding:12px 16px;border-radius:12px;border:none;background:#6d5dfc;color:#fff;font-weight:700;cursor:pointer}
+    .muted{color:#98a2b3;font-size:13px}
+    #playerBox{position:relative;margin-top:16px; background:#0f1220;border-radius:14px;padding:12px}
+    #ytContainer{position:relative;aspect-ratio:16/9;width:100%;background:#000;border-radius:10px;overflow:hidden}
+    #ytOverlay{position:absolute;left:0;right:0;bottom:6%;padding:8px 12px;text-align:center;
+      font-size:18px;line-height:1.6;background:rgba(0,0,0,.35);border-radius:10px;margin:0 8%;
+      text-shadow: 0 1px 2px rgba(0,0,0,.7)}
+    #status{margin-top:10px}
+    track{background:#000}
+    .badge{display:inline-block;background:#1f2937;color:#c4b5fd;border:1px solid #334155;border-radius:999px;padding:4px 10px;font-size:12px;margin-top:8px}
   </style>
+  <script>
+    // مُحلّل VTT بسيط -> يرجع مصفوفة كيوهات [{start,end,text}]
+    async function loadVTT(url){
+      const txt = await (await fetch(url)).text();
+      const lines = txt.replace(/\r/g,'').split('\n');
+      const cues = [];
+      for (let i=0;i<lines.length;i++){
+        const l = lines[i].trim();
+        if (!l || /^\d+$/.test(l)) continue;
+        const m = l.match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+        if (m){
+          const start = toSec(m[1]); const end = toSec(m[2]);
+          let text = "";
+          i++;
+          while(i<lines.length && lines[i].trim()){
+            text += (lines[i].trim() + " ");
+            i++;
+          }
+          cues.push({start,end,text:text.trim()});
+        }
+      }
+      return cues;
+      function toSec(t){ const [h,m,s]=t.split(':'); return (+h)*3600+(+m)*60+parseFloat(s); }
+    }
+  </script>
 </head>
 <body>
-  <h1>🎧 الترجمة الحيّة للفيديو</h1>
-  <p>ألصق رابط الفيديو (يوتيوب / تويتر / فيسبوك...) ثم اضغط "ابدأ" لترجمة محتوى الصوت فورًا إلى العربية.</p>
-  
-  <form id="videoForm">
-    <input id="videoUrl" type="url" placeholder="https://..." required />
-    <button type="submit">ابدأ</button>
-  </form>
+  <div class="wrap">
+    <h1>🎧 الترجمة الحيّة للفيديو</h1>
+    <p class="muted">ألصق الرابط (YouTube/Twitter/MP4/M3U8...) ثم اضغط "ابدأ".</p>
+    <form id="urlForm" class="row">
+      <input id="videoUrl" type="url" placeholder="https://..." required/>
+      <button type="submit">ابدأ</button>
+    </form>
 
-  <div id="status"></div>
-  <div id="resultBox"></div>
+    <div id="status" class="muted"></div>
+
+    <div id="playerBox" style="display:none">
+      <!-- نوع = video (مصادر مباشرة) -->
+      <video id="html5Video" controls crossorigin="anonymous" style="display:none;width:100%;border-radius:10px"></video>
+
+      <!-- نوع = youtube -->
+      <div id="ytContainer" style="display:none">
+        <div id="ytPlayer"></div>
+        <div id="ytOverlay" style="display:none"></div>
+      </div>
+
+      <div id="meta" class="badge"></div>
+    </div>
+  </div>
 
   <script>
-    const form = document.getElementById("videoForm");
-    const statusEl = document.getElementById("status");
-    const resultBox = document.getElementById("resultBox");
+    const form = document.getElementById('urlForm');
+    const statusEl = document.getElementById('status');
+    const box = document.getElementById('playerBox');
+    const meta = document.getElementById('meta');
 
-    form.addEventListener("submit", async (e) => {
+    const vEl = document.getElementById('html5Video');
+    const ytWrap = document.getElementById('ytContainer');
+    const ytOverlay = document.getElementById('ytOverlay');
+    let ytPlayer = null, cues = [], overlayTimer = null;
+
+    form.addEventListener('submit', async (e)=>{
       e.preventDefault();
-      const url = document.getElementById("videoUrl").value.trim();
-      if (!url) return alert("الرجاء إدخال رابط الفيديو أولاً.");
-      
-      statusEl.innerHTML = "⏳ جاري تحليل الفيديو واستخراج الصوت...";
-      resultBox.textContent = "";
-      
-      try {
-        const formData = new FormData();
-        formData.append("video_url", url);
-        const res = await fetch("/api/translate_video", {
-          method: "POST",
-          body: formData
-        });
-        const data = await res.json();
-        if (data.error) {
-          statusEl.innerHTML = "❌ خطأ: " + data.error;
-        } else {
-          statusEl.innerHTML = "✅ تم استخراج الصوت وترجمته:";
-          resultBox.innerHTML =
-            "<b>النص الأصلي:</b><br>" + data.original + "<br><hr>" +
-            "<b>الترجمة:</b><br>" + data.translated;
+      clearOverlay();
+      const video_url = document.getElementById('videoUrl').value.trim();
+      if(!video_url){ alert('ألصق رابط الفيديو'); return; }
+      statusEl.textContent = "⏳ جاري تجهيز الصوت والترجمة...";
+      box.style.display = 'none'; vEl.style.display='none'; ytWrap.style.display='none';
+
+      const fd = new FormData();
+      fd.append('video_url', video_url);
+      const res = await fetch('/api/translate_video', { method:'POST', body:fd });
+      const data = await res.json();
+
+      if(!res.ok || data.error){
+        statusEl.textContent = "❌ خطأ: " + (data.error || res.statusText);
+        return;
+      }
+
+      statusEl.textContent = "✅ جاهز.";
+      meta.textContent = (data.title || '') + (data.vtt_url ? " • VTT" : "");
+
+      // حمل نصوص VTT إن وُجدت
+      cues = [];
+      if (data.vtt_url){
+        try { cues = await loadVTT(data.vtt_url); } catch(_){}
+      }
+
+      box.style.display = 'block';
+
+      if (data.player === 'video'){
+        // video tag + track
+        vEl.innerHTML = '';
+        const src = document.createElement('source');
+        src.src = data.video_src; // قد يكون mp4 أو m3u8 (يعمل مباشرة على أندرويد/كروم غالبًا)
+        vEl.appendChild(src);
+
+        if (data.vtt_url){
+          const tr = document.createElement('track');
+          tr.kind = 'subtitles'; tr.srclang='ar'; tr.label='Arabic'; tr.default = true; tr.src = data.vtt_url;
+          vEl.appendChild(tr);
         }
-      } catch (err) {
-        statusEl.innerHTML = "❌ حدث خطأ أثناء الاتصال بالخادم.";
-        console.error(err);
+        vEl.style.display = 'block';
+        vEl.load(); vEl.play().catch(()=>{});
+        ytWrap.style.display='none';
+      } else {
+        // YouTube + overlay
+        ytWrap.style.display='block';
+        vEl.style.display='none';
+        ytOverlay.style.display = cues.length ? 'block':'none';
+        ensureYTAPI().then(()=>{
+          if (ytPlayer) ytPlayer.destroy();
+          const vid = data.youtube_id || extractYouTubeID(data.video_url || '');
+          ytPlayer = new YT.Player('ytPlayer', {
+            videoId: vid,
+            playerVars: { modestbranding:1, rel:0, cc_load_policy:0 },
+            events: {
+              onReady: ()=>{ ytPlayer.playVideo(); startOverlayLoop(); },
+              onStateChange: (ev)=>{ if (ev.data===YT.PlayerState.PLAYING) startOverlayLoop(); }
+            }
+          });
+        });
       }
     });
+
+    function startOverlayLoop(){
+      clearOverlay();
+      if (!ytPlayer || !cues.length) return;
+      overlayTimer = setInterval(()=>{
+        const t = ytPlayer.getCurrentTime ? ytPlayer.getCurrentTime() : 0;
+        const c = cues.find(q => t>=q.start && t<=q.end);
+        ytOverlay.textContent = c ? c.text : '';
+      }, 200);
+    }
+    function clearOverlay(){
+      if (overlayTimer) clearInterval(overlayTimer);
+      overlayTimer = null; ytOverlay.textContent = '';
+    }
+    function ensureYTAPI(){
+      return new Promise((res)=>{
+        if (window.YT && window.YT.Player) return res();
+        const s = document.createElement('script'); s.src='https://www.youtube.com/iframe_api';
+        window.onYouTubeIframeAPIReady = ()=>res();
+        document.head.appendChild(s);
+      });
+    }
+    function extractYouTubeID(url){
+      try{
+        const u = new URL(url);
+        if (u.hostname.includes('youtu.be')) return u.pathname.slice(1);
+        if (u.searchParams.get('v')) return u.searchParams.get('v');
+      }catch(e){}
+      return url;
+    }
   </script>
 </body>
 </html>
