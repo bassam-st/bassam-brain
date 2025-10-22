@@ -1,76 +1,75 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>🎧 ترجمة حيّة — بسام براين</title>
-  <style>
-    body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,Arial;padding:18px;text-align:center}
-    h2{color:#c4b5fd;margin:10px 0 18px}
-    form{margin-bottom:16px}
-    input{padding:10px;border-radius:10px;border:none;width:70%;max-width:560px;background:#0f1421;color:#fff}
-    button{padding:10px 16px;border:none;border-radius:10px;background:#7c3aed;color:#fff;cursor:pointer;margin-top:10px}
-    video{width:100%;max-width:960px;margin:16px auto;border-radius:14px;display:block;background:#000}
-    .subs{max-width:960px;margin:10px auto;text-align:right;background:#111827;border:1px solid #2a2f45;border-radius:14px;padding:12px}
-    .line{padding:6px 8px;border-bottom:1px dashed #2a2f45}
-    .muted{color:#9ca3af}
-    .error{color:#ef4444}
-  </style>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>ترجمة الفيديو</title>
+    <style>
+        body { background: #0b0190; color: #ffffff; font-family: system-ui, Arial; padding: 15px; text-align: center; }
+        h2 { color: #ffffff; margin: 10px 0 18px; }
+        form { margin-bottom: 20px; }
+        input { padding: 10px; border-radius: 10px; border: none; width: 70%; max-width: 360px; background: #014221; color: #fff; }
+        button { padding: 10px 20px; border: none; border-radius: 10px; background: #256abc; color: #fff; cursor: pointer; margin-top: 10px; }
+        video { width: 100%; max-width: 360px; margin: 10px auto; border-radius: 10px; display: block; background: #000; }
+        audio { width: 360px; margin: 10px auto; text-align: right; background: #118227; border: 1px solid #282165; border-radius: 10px; }
+        .line { padding: 10px; border-bottom: 1px dashed #282165; }
+        .match { color: #643a9f; }
+        .error { color: #ff4444; }
+    </style>
 </head>
 <body>
-  <h2>🎬 بسام — ترجمة الفيديو الحيّة إلى العربية</h2>
-  <form method="post" action="/translate_video_rt">
-    <input type="text" name="video_url" placeholder="ألصق رابط الفيديو هنا..." required/>
-    <div><button type="submit">ابدأ الترجمة الآن 🎧</button></div>
-  </form>
-
-  {% if video_url %}
-    <video id="v" controls autoplay src="{{ video_url }}"></video>
-
+    <h2>ترجمة الفيديو</h2>
+    <form method="post">
+        <input type="text" name="video_url" placeholder="أدخل رابط الفيديو..." required/>
+        <div><button type="submit">بدء الترجمة</button></div>
+    </form>
+    
+    {% if video_url %}
+    <video controls autoplay src="{{ video_url }}"></video>
     <div id="subs" class="subs">
-      <div class="line muted">جاري البدء… إذا طال الانتظار قد يتحول للوضع البطيء تلقائيًا.</div>
+        <div class="line">جاري تحميل الترجمة...</div>
     </div>
-
+    
     <script>
-      (function () {
+    (function() {
         const url = "{{ video_url }}";
         const subs = document.getElementById('subs');
-        const ev = new EventSource('/sse_subs?url=' + encodeURIComponent(url));
-
-        function addLine(html, cls="") {
-          const div = document.createElement('div');
-          div.className = 'line ' + cls;
-          div.innerHTML = html;
-          subs.appendChild(div);
-          subs.scrollTop = subs.scrollHeight;
+        const ev = new EventSource('/srt_subs?url=' + encodeURIComponent(url));
+        
+        function addLine(html, className) {
+            const div = document.createElement('div');
+            div.className = 'line ' + className;
+            div.innerHTML = html;
+            subs.appendChild(div);
+            subs.scrollTop = subs.scrollHeight;
         }
-
+        
         ev.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.type === 'final') {
-              addLine(`<b>الترجمة:</b> ${data.ar}<br><span class="muted">(${data.src})</span>`);
-            } else if (data.type === 'fallback') {
-              addLine('⚠️ ' + data.msg, 'muted');
-            } else if (data.type === 'info') {
-              addLine('ℹ️ ' + data.msg, 'muted');
-            } else if (data.type === 'error') {
-              addLine('❌ ' + data.msg, 'error');
-            } else if (data.type === 'done') {
-              addLine('✅ انتهى البث.');
-              ev.close();
+            try {
+                const data = JSON.parse(e.data);
+                if (data.type == 'final') {
+                    addLine("<b>" + data.text + "</b> <span class='match'>(" + data.trans + ")</span>", "");
+                } else if (data.type == 'fallback') {
+                    addLine('⚠ ' + data.msg, 'info');
+                } else if (data.type == 'info') {
+                    addLine('ℹ ' + data.msg, 'info');
+                } else if (data.type == 'error') {
+                    addLine('❌ ' + data.msg, 'error');
+                } else if (data.type == 'done') {
+                    addLine('✅ اكتملت الترجمة', 'info');
+                    ev.close();
+                }
+            } catch (err) {
+                addLine('❌ خطأ في البيانات', 'error');
             }
-          } catch (err) {
-            addLine('❌ خطأ في قراءة البث.', 'error');
-          }
         };
-
+        
         ev.onerror = () => {
-          addLine('❌ انقطع بث الترجمة.', 'error');
-          ev.close();
+            addLine('❌ خطأ في الاتصال', 'error');
+            ev.close();
         };
-      })();
+    })();
     </script>
-  {% endif %}
+    {% endif %}
 </body>
 </html>
