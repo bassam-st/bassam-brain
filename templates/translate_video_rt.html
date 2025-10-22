@@ -2,75 +2,51 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>🎧 ترجمة حيّة — بسام براين</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>الترجمة الحية للفيديو</title>
+  <link rel="stylesheet" href="/static/style.css"/>
   <style>
-    body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,Arial;padding:18px;text-align:center}
-    h2{color:#c4b5fd;margin:10px 0 18px}
-    form{margin-bottom:16px}
-    input{padding:10px;border-radius:10px;border:none;width:70%;max-width:560px;background:#0f1421;color:#fff}
-    button{padding:10px 16px;border:none;border-radius:10px;background:#7c3aed;color:#fff;cursor:pointer;margin-top:10px}
-    video{width:100%;max-width:960px;margin:16px auto;border-radius:14px;display:block;background:#000}
-    .subs{max-width:960px;margin:10px auto;text-align:right;background:#111827;border:1px solid #2a2f45;border-radius:14px;padding:12px}
-    .line{padding:6px 8px;border-bottom:1px dashed #2a2f45}
-    .muted{color:#9ca3af}
-    .error{color:#ef4444}
+    body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif;margin:0}
+    .wrap{max-width:860px;margin:24px auto;background:#121826;border-radius:18px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    h1{margin:0 0 12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    input[type="url"]{flex:1;min-width:240px;padding:12px 14px;border-radius:12px;border:none;background:#0f1421;color:#fff;direction:ltr}
+    button{padding:12px 16px;border-radius:12px;border:none;background:#7c3aed;color:#fff;font-weight:700;cursor:pointer}
+    .muted{color:#98a2b3;font-size:13px;margin-top:8px}
+    #status{margin-top:14px}
   </style>
 </head>
 <body>
-  <h2>🎬 بسام — ترجمة الفيديو الحيّة إلى العربية</h2>
-  <form method="post" action="/translate_video_rt">
-    <input type="text" name="video_url" placeholder="ألصق رابط الفيديو هنا..." required/>
-    <div><button type="submit">ابدأ الترجمة الآن 🎧</button></div>
-  </form>
+  <div class="wrap">
+    <h1>🎧 الترجمة الحيّة للفيديو</h1>
+    <p class="muted">الصق رابط الفيديو (يوتيوب/تويتش/فيسبوك…)، ثم اضغط “ابدأ”.</p>
 
-  {% if video_url %}
-    <video id="v" controls autoplay src="{{ video_url }}"></video>
+    <form id="urlForm" class="row" onsubmit="startRT(event)">
+      <input id="videoUrl" type="url" placeholder="https://..." required />
+      <button type="submit">ابدأ</button>
+    </form>
 
-    <div id="subs" class="subs">
-      <div class="line muted">جاري البدء… إذا طال الانتظار قد يتحول للوضع البطيء تلقائيًا.</div>
-    </div>
+    <div id="status" class="muted"></div>
 
-    <script>
-      (function () {
-        const url = "{{ video_url }}";
-        const subs = document.getElementById('subs');
-        const ev = new EventSource('/sse_subs?url=' + encodeURIComponent(url));
+    <div id="subs" style="margin-top:16px;white-space:pre-wrap;line-height:1.8;background:#0f1220;border:1px solid #2a2f45;border-radius:12px;padding:12px;"></div>
+  </div>
 
-        function addLine(html, cls="") {
-          const div = document.createElement('div');
-          div.className = 'line ' + cls;
-          div.innerHTML = html;
-          subs.appendChild(div);
-          subs.scrollTop = subs.scrollHeight;
-        }
+  <script>
+    async function startRT(e){
+      e.preventDefault();
+      const url = document.getElementById('videoUrl').value.trim();
+      const status = document.getElementById('status');
+      const subs = document.getElementById('subs');
+      subs.textContent = '';
+      if(!url){ return; }
+      status.textContent = 'جاري الاتصال…';
 
-        ev.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.type === 'final') {
-              addLine(`<b>الترجمة:</b> ${data.ar}<br><span class="muted">(${data.src})</span>`);
-            } else if (data.type === 'fallback') {
-              addLine('⚠️ ' + data.msg, 'muted');
-            } else if (data.type === 'info') {
-              addLine('ℹ️ ' + data.msg, 'muted');
-            } else if (data.type === 'error') {
-              addLine('❌ ' + data.msg, 'error');
-            } else if (data.type === 'done') {
-              addLine('✅ انتهى البث.');
-              ev.close();
-            }
-          } catch (err) {
-            addLine('❌ خطأ في قراءة البث.', 'error');
-          }
-        };
-
-        ev.onerror = () => {
-          addLine('❌ انقطع بث الترجمة.', 'error');
-          ev.close();
-        };
-      })();
-    </script>
-  {% endif %}
+      // إذا كان عندك WebSocket/Endpoint جاهز للريل تايم استبدل المسار هنا
+      // مثال WebSocket: ws://HOST/ws/rt?video_url=...
+      // مؤقتًا نعرض فقط أننا التقطنا الرابط بنجاح:
+      status.textContent = 'تم التقاط الرابط ✅ سيتم البدء بالترجمة الحية عندما يكتمل الربط بالخلفية.';
+      // ملاحظة: الربط الفعلي يعتمد على الكود في باك-إند الريل تايم (Vosk/WebSocket).
+    }
+  </script>
 </body>
 </html>
