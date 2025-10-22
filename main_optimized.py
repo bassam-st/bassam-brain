@@ -1,141 +1,29 @@
-# main_optimized.py — Bassam Brain (FastAPI, SmartNLP light)
-# بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink + SmartNLP (بدون نموذج ثقيل)
+# main_plus_skills.py — Bassam Brain + SkillRouter (No heavy model)
+# يضيف مهارات: بلد/مدينة (ويكيبيديا), آلة حاسبة, تحويل وحدات, توقيت مدن, تعريف سريع
+# إن لم تُكتشف مهارة مناسبة → يعود لمحركات البحث الحالية لديك
 
-import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, asyncio
-import datetime as dt
-from typing import Optional, List, Dict
+import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, math, asyncio, datetime as dt
+from typing import Optional, List, Dict, Tuple
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request, Form, UploadFile, File
-from fastapi.responses import (
-    HTMLResponse, RedirectResponse, FileResponse,
-    StreamingResponse, JSONResponse
-)
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import httpx
 from duckduckgo_search import DDGS
-
-# جدولة
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
-# OpenAI (اختياري)
-from openai import OpenAI
+# اختياري: لتحسين استخراج النص من الصفحات (لو موجودة في requirements)
+USE_READABILITY = True
+try:
+    from bs4 import BeautifulSoup
+    from readability import Document
+except Exception:
+    USE_READABILITY = False
 
-# ===== SmartNLP: عقل لغوي خفيف لبسّام (بدون نموذج ثقيل)
-# تعتمد على مكتبتين خفيفتين: langdetect + rapidfuzz
-from langdetect import detect, DetectorFactory
-from rapidfuzz import fuzz
-
-DetectorFactory.seed = 0
-
-AR_STOPWORDS = {
-    "في","من","على","عن","إلى","الى","ما","ماذا","هو","هي","هم","هن","هذا","هذه",
-    "ذلك","تلك","انا","أنت","انت","أن","ان","كان","كانت","يكون","هل","قد","تم","ثم",
-    "او","أو","و","مع","لقد","كيف","اين","أين","كم","لماذا","ليش","شو","ايش"
-}
-
-AR_SYNONYMS = {
-    "وين": "أين", "ليش": "لماذا", "شو": "ما", "ايش": "ما",
-    "الجوال": "الهاتف", "الجوالات": "الهواتف",
-    "السعودية": "المملكة العربية السعودية",
-}
-
-KB_EN2AR = str.maketrans({
-    'a':'ش','b':'لا','c':'ؤ','d':'ي','e':'ث','f':'ب','g':'ل','h':'ا','i':'ه','j':'ت',
-    'k':'ن','l':'م','m':'ة','n':'ى','o':'خ','p':'ح','q':'ض','r':'ق','s':'س','t':'ف',
-    'u':'ع','v':'ر','w':'ص','x':'ء','y':'غ','z':'ئ'
-})
-
-def normalize_ar_strict(t: str) -> str:
-    t = (t or "").strip()
-    t = re.sub(r"[ًٌٍَُِّْـ]", "", t)  # إزالة التشكيل والمد
-    t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ى","ي").replace("ة","ه")
-    t = re.sub(r"[^\w\s\u0600-\u06FF]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-def unify_digits(t: str) -> str:
-    trans = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
-    return (t or "").translate(trans)
-
-def fix_keyboard_en2ar_if_needed(t: str) -> str:
-    if not t: return t
-    raw = t.lower()
-    if re.fullmatch(r"[a-z\s\-\.\,\!\?]{3,}", raw) and len(set(raw) - set("asdfghjkl; qwertyuiopzxcvbnm-.,!? ")) < 8:
-        return raw.translate(KB_EN2AR)
-    return t
-
-def detect_lang_light(t: str) -> str:
-    try:
-        code = detect((t or "").strip())
-        return (code or "ar").split("-")[0]
-    except Exception:
-        return "ar"
-
-def drop_stopwords_ar(words: List[str]) -> List[str]:
-    return [w for w in words if w not in AR_STOPWORDS and len(w) > 1]
-
-def rewrite_query_ar(q: str) -> str:
-    """إعادة كتابة للسؤال العربي ليصبح أنسب للبحث."""
-    q0 = unify_digits(normalize_ar_strict(fix_keyboard_en2ar_if_needed(q)))
-    for k, v in AR_SYNONYMS.items():
-        q0 = re.sub(rf"\b{k}\b", v, q0)
-    toks = drop_stopwords_ar(q0.split())
-    if any(w in toks for w in ["موقع","تقع","اين","أين"]):
-        obj = " ".join([w for w in toks if w not in ["موقع","تقع","اين","أين"]])
-        if obj:
-            return f"ما هو الموقع الجغرافي ل{obj}"
-    return " ".join(toks) if toks else q0
-
-INTENT_PATTERNS = {
-    "greet": ["مرحبا", "السلام عليكم", "هلا", "hi", "hello"],
-    "intro": ["من انت", "مين انت", "من تكون", "عرف بنفسك", "من هو المساعد"],
-    "about_bassam": ["من هو بسام", "من صنع التطبيق", "مين المطور", "بسام الشتيمي"],
-    "privacy_personal": ["اسم زوجة", "اسم ام", "من هي زوجة", "من هي ام", "والدة بسام", "زوجة بسام"],
-    "thanks": ["شكرا", "thx", "thanks", "مشكور"],
-}
-
-def fuzzy_intent(q: str) -> Optional[str]:
-    base = normalize_ar_strict(q)
-    candidates = []
-    for intent, samples in INTENT_PATTERNS.items():
-        score = max(fuzz.token_set_ratio(base, s) for s in samples)
-        candidates.append((intent, score))
-    intent, score = max(candidates, key=lambda x: x[1])
-    return intent if score >= 75 else None
-
-def smart_preprocess(q: str) -> Dict:
-    """يرجع:
-       {"lang": "ar|en|..", "intent": str|None, "query_rewritten": str, "handled": {"answer": "..."}|None}
-    """
-    lang = detect_lang_light(q)
-    if lang == "ar":
-        rewritten = rewrite_query_ar(q)
-        intent = fuzzy_intent(q)
-        if intent == "greet":
-            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
-                    "handled": {"answer": "أهلاً وسهلاً! كيف أقدر أساعدك؟"}}
-        if intent == "intro":
-            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
-                    "handled": {"answer": "أنا بسّام مساعدك الذكي للبحث والتلخيص. اكتب سؤالك ودعني أتكفّل بالباقي."}}
-        if intent == "about_bassam":
-            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
-                    "handled": {"answer": "بسام الشتيمي هو مطوّر هذا التطبيق."}}
-        if intent == "privacy_personal":
-            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
-                    "handled": {"answer": "حفاظًا على الخصوصية لا نجيب عن الأسئلة الشخصية. استخدم التطبيق للأسئلة العامة فقط."}}
-        if intent == "thanks":
-            return {"lang": lang, "intent": intent, "query_rewritten": rewritten,
-                    "handled": {"answer": "على الرحب والسعة! 👌"}}
-        return {"lang": lang, "intent": intent, "query_rewritten": rewritten, "handled": None}
-    return {"lang": lang, "intent": None, "query_rewritten": (q or "").strip(), "handled": None}
-
-
-# ----------------------------- مسارات
+# ============================= إعدادات ومسارات أساسية (مثل كودك الأصلي)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
@@ -146,88 +34,31 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DATA_DIR, "bassam.db")
 
-# ----------------------------- تطبيق
 app = FastAPI(title="Bassam Brain")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# ----------------------------- مفاتيح/إعدادات عامة
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 
-# OpenAI (احتياطي)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-# ----------------------------- الربط مع النموذج المحلي (llama-server / vLLM المتوافق)
-LOCAL_LLM_BASE = os.getenv("LOCAL_LLM_BASE", "").rstrip("/")
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "local").strip()
-USE_LOCAL_FIRST = os.getenv("USE_LOCAL_FIRST", "1").strip()  # "1" جرّب المحلي أولًا، "0" العكس
-
-async def ask_local_llm(user_q: str, context_lines: List[str], temperature: float = 0.3, max_tokens: int = 600) -> Dict:
-    if not LOCAL_LLM_BASE:
-        return {"ok": False, "error": "LOCAL_LLM_BASE not configured"}
-    try:
-        system_msg = (
-            "You are a helpful assistant. ALWAYS respond in the SAME language as the user's question. "
-            "كن موجزًا وواضحًا، واستخدم نقاطًا مختصرة عند الحاجة. "
-            "اعتمد على المعلومات التالية من نتائج البحث كمراجع، وإن لم تكن واثقًا قل: لا أعلم."
-        )
-        user_msg = f"السؤال:\n{user_q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
-
-        payload = {
-            "model": LOCAL_LLM_MODEL or "local",
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-        }
-
-        async with httpx.AsyncClient(timeout=120) as ax:
-            r = await ax.post(f"{LOCAL_LLM_BASE}/v1/chat/completions",
-                              headers={"Content-Type": "application/json"},
-                              json=payload)
-        if r.status_code != 200:
-            return {"ok": False, "error": f"{r.status_code}: {r.text}"}
-
-        data = r.json()
-        answer = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        return {"ok": True, "answer": answer.strip(), "engine_used": "Local"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-# ----------------------------- OneSignal + الدوريات + التوقيت
+# OneSignal & توقيت (كما لديك)
 ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
 ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()
 TZ = ZoneInfo(TIMEZONE)
 
-LEAGUE_IDS = [x.strip() for x in os.getenv(
-    "LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790"
-).split(",") if x.strip()]
-
-YACINE_PACKAGE = os.getenv("YACINE_PACKAGE", "com.yacine.app").strip()
-GENERAL_PACKAGE = os.getenv("GENERAL_PACKAGE", "com.general.live").strip()
-YACINE_SCHEME = os.getenv("YACINE_SCHEME", "yacine").strip()
-GENERAL_SCHEME = os.getenv("GENERAL_SCHEME", "general").strip()
-
 LEAGUE_NAME_BY_ID = {
-    "4328": "English Premier League",
-    "4335": "Spanish La Liga",
-    "4332": "Italian Serie A",
-    "4331": "German Bundesliga",
-    "4334": "French Ligue 1",
-    "4480": "Saudi Pro League",
+    "4328": "English Premier League", "4335": "Spanish La Liga",
+    "4332": "Italian Serie A", "4331": "German Bundesliga",
+    "4334": "French Ligue 1", "4480": "Saudi Pro League",
     "4790": "UEFA Champions League",
 }
+LEAGUE_IDS = [x.strip() for x in os.getenv("LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790").split(",") if x.strip()]
 
-# ============================== قاعدة البيانات
+# ============================= DB و Logs
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -235,66 +66,22 @@ def db() -> sqlite3.Connection:
 
 def init_db():
     with db() as con:
-        con.execute(
-            """
+        con.execute("""
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
                 type TEXT NOT NULL,      -- search | image | ask | push
-                query TEXT,
-                file_name TEXT,
-                engine_used TEXT,
-                ip TEXT,
-                ua TEXT
-            );
-            """
-        )
+                query TEXT, file_name TEXT, engine_used TEXT, ip TEXT, ua TEXT
+            );""")
 init_db()
 
 def log_event(event_type: str, ip: str, ua: str, query: Optional[str]=None,
               file_name: Optional[str]=None, engine_used: Optional[str]=None):
     with db() as con:
-        con.execute(
-            "INSERT INTO logs (ts, type, query, file_name, engine_used, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (dt.datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua)
-        )
+        con.execute("INSERT INTO logs (ts, type, query, file_name, engine_used, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (dt.datetime.utcnow().isoformat(timespec="seconds")+"Z", event_type, query, file_name, engine_used, ip, ua))
 
-# ============================== ردود ثابتة + خصوصية
-CANNED_ANSWER = "بسام الشتيمي هو منصوريّ الأصل، وهو صانع هذا التطبيق."
-INTRO_ANSWER = "أنا بسام الشتيمي، مساعدك. أخبرني بما ترغب أن تسألني."
-SENSITIVE_PRIVACY_ANSWER = (
-    "حرصًا على خصوصيتك وخصوصية الآخرين، بما في ذلك اسم زوجتك أو والدتك، "
-    "لا يقدّم بسام أي معلومات شخصية أو عائلية. "
-    "يُرجى استخدام التطبيق في الأسئلة العامة أو التعليمية فقط."
-)
-
-def normalize_ar(text: str) -> str:
-    t = (text or "").strip().lower()
-    t = re.sub(r"[ًٌٍَُِّْ]", "", t)
-    t = t.replace("أ","ا").replace("إ","ا").replace("آ","ا")
-    t = t.replace("ى","ي").replace("ة","ه")
-    return t
-
-INTRO_PATTERNS = [r"من انت", r"من أنت", r"مين انت", r"من تكون", r"من هو المساعد", r"تعرف بنفسك", r"عرف بنفسك"]
-BASSAM_PATTERNS = [
-    r"من هو بسام", r"مين بسام", r"من هو بسام الذكي", r"من هو بسام الشتيمي",
-    r"من صنع التطبيق", r"من هو صانع التطبيق", r"من المطور", r"من هو صاحب التطبيق",
-    r"من مطور التطبيق", r"من برمج التطبيق", r"من انشأ التطبيق", r"مين المطور"
-]
-SENSITIVE_PATTERNS = [
-    r"اسم\s+زوج(ة|ه)?\s*بسام", r"زوج(ة|ه)\s*بسام", r"مرت\s*بسام",
-    r"اسم\s*ام\s*بسام", r"اسم\s*والدة\s*بسام", r"ام\s*بسام", r"والدة\s*بسام",
-    r"اسم\s*زوجة", r"اسم\s*ام", r"من هي زوجة", r"من هي ام"
-]
-
-def is_intro_query(user_text: str) -> bool:
-    q = normalize_ar(user_text);  return any(re.search(p, q) for p in INTRO_PATTERNS)
-def is_bassam_query(user_text: str) -> bool:
-    q = normalize_ar(user_text);  return any(re.search(p, q) for p in BASSAM_PATTERNS)
-def is_sensitive_personal_query(user_text: str) -> bool:
-    q = normalize_ar(user_text);  return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
-
-# ============================== تلخيص بسيط
+# ============================= أدوات نصية سريعة
 def _clean(txt: str) -> str:
     txt = (txt or "").strip()
     return re.sub(r"[^\w\s\u0600-\u06FF]", " ", txt)
@@ -312,16 +99,169 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(cleaned) >= max_items: break
     return cleaned
 
-# ============================== البحث (Serper ثم DuckDuckGo)
+# ============================= مهارات (SkillRouter)
+CITY_TZ = {
+    "الرياض": "Asia/Riyadh", "جدة": "Asia/Riyadh", "مكة": "Asia/Riyadh",
+    "صنعاء": "Asia/Aden", "أبوظبي": "Asia/Dubai", "دبي": "Asia/Dubai",
+    "القاهرة": "Africa/Cairo", "الاسكندرية": "Africa/Cairo",
+    "الدوحة": "Asia/Qatar", "الكويت": "Asia/Kuwait", "المنامة": "Asia/Bahrain",
+    "عمّان": "Asia/Amman", "دمشق": "Asia/Damascus", "بيروت": "Asia/Beirut",
+    "الجزائر": "Africa/Algiers", "الرباط": "Africa/Casablanca", "تونس": "Africa/Tunis",
+    "لندن": "Europe/London", "باريس": "Europe/Paris", "برلين": "Europe/Berlin",
+    "اسطنبول": "Europe/Istanbul", "طوكيو": "Asia/Tokyo", "نيويورك": "America/New_York",
+    "الدوادمي": "Asia/Riyadh"
+}
+
+UNIT_MAP = {
+    ("km","mi"): 0.621371, ("mi","km"): 1.60934,
+    ("kg","lb"): 2.20462,  ("lb","kg"): 0.453592,
+    ("mph","kmh"): 1.60934,("kmh","mph"): 0.621371,
+    ("c","f"): ("temp", lambda c: c*9/5+32), ("f","c"): ("temp", lambda f: (f-32)*5/9),
+}
+
+def _safe_calc(expr: str) -> Optional[float]:
+    # آلة حاسبة آمنة للغاية: أرقام + +-*/%^() ومسافات فقط
+    if not re.fullmatch(r"[0-9\.\s\+\-\*\/\%\^\(\)]+", expr):
+        return None
+    try:
+        # استبدال ^ بـ ** للأسّ
+        expr = expr.replace("^", "**")
+        return float(eval(expr, {"__builtins__": {}}, {}))
+    except Exception:
+        return None
+
+async def wiki_summary(term: str, lang: str="ar") -> Tuple[Optional[str], Optional[str], Dict]:
+    """
+    يرجع (ملخّص, رابط, حقائق) من ويكيبيديا REST.
+    facts قد تحتوي: capital, region, location, coords...
+    """
+    term_q = term.strip().replace(" ", "_")
+    langs = [lang, "en"] if lang != "en" else ["en","ar"]
+    for L in langs:
+        url = f"https://{L}.wikipedia.org/api/rest_v1/page/summary/{term_q}"
+        try:
+            async with httpx.AsyncClient(timeout=12) as ax:
+                r = await ax.get(url)
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            extract = (data.get("extract") or "").strip()
+            page_url = data.get("content_urls", {}).get("desktop", {}).get("page")
+            facts = {}
+            # محاولة بسيطة لالتقاط معلومات من extract
+            if extract:
+                # capital
+                m = re.search(r"(عاصمتها|العاصمة)\s+([^\s،\.]+)", extract)
+                if m: facts["capital"] = m.group(2)
+                # region
+                m2 = re.search(r"(في\s+)?(?:شبه الجزيرة العربية|أفريقيا|آسيا|أوروبا|أمريكا(?:\s+(?:الشمالية|الجنوبية))?)", extract)
+                if m2: facts["region"] = m2.group(0).replace("في ","")
+            return extract, page_url, facts
+        except Exception:
+            continue
+    return None, None, {}
+
+def parse_country_city_q(q: str) -> Optional[Dict]:
+    qn = q.strip()
+    # أين تقع اليمن/عُمان/نجران/باريس...
+    m = re.search(r"(اين|أين)\s+تقع\s+(.+)", qn)
+    if m:
+        return {"type": "geo", "ask": "where", "term": m.group(2).strip()}
+    # ما عاصمة X؟
+    m2 = re.search(r"(ما\s+)?(عاصمه|عاصمة)\s+(.+)", qn)
+    if m2:
+        return {"type": "geo", "ask": "capital", "term": m2.group(3).strip()}
+    # ما هي/هو دولة/مدينة X
+    m3 = re.search(r"(ما\s+هي|ما\s+هو)\s+(?:دوله|دولة|مدينه|مدينة)\s+(.+)", qn)
+    if m3:
+        return {"type": "geo", "ask": "about", "term": m3.group(2).strip()}
+    return None
+
+def parse_unit_convert(q: str) -> Optional[Tuple[float, str, str]]:
+    # أمثلة: 50 mph إلى كم/س | 100 km to mi | 70 kg to lb
+    q = q.lower().replace("الى","to").replace("إلى","to").replace("كم/س","kmh")
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(kmh|mph|km|mi|kg|lb|c|f)\s*(?:to|ل|في)\s*(kmh|mph|km|mi|kg|lb|c|f)", q)
+    if not m: return None
+    val = float(m.group(1)); src = m.group(2); dst = m.group(3)
+    return val, src, dst
+
+def parse_time_city(q: str) -> Optional[str]:
+    # الوقت الآن في طوكيو/القاهرة/الرياض...
+    m = re.search(r"(?:الوقت\s+الان|الوقت\s+الآن|كم\s+الساعة|ما\s+الوقت)\s+في\s+(.+)", q)
+    if m:
+        return m.group(1).strip(" ؟!.،")
+    return None
+
+async def skill_router(q: str) -> Optional[Dict]:
+    """ يحاول الإجابة مباشرة. إن نجح يرجّع dict فيه answer/bullets/sources """
+    q_stripped = (q or "").strip()
+
+    # 1) آلة حاسبة
+    m_calc = re.search(r"^([0-9\.\s\+\-\*\/\%\^\(\)]+)$", q_stripped)
+    if m_calc:
+        res = _safe_calc(m_calc.group(1))
+        if res is not None:
+            return {"answer": f"النتيجة: {res}", "bullets": [f"التعبير: {m_calc.group(1)}", f"النتيجة: {res}"], "sources": []}
+
+    # 2) تحويل وحدات
+    m_conv = parse_unit_convert(q_stripped)
+    if m_conv:
+        val, src, dst = m_conv
+        key = (src, dst)
+        if key in UNIT_MAP:
+            factor = UNIT_MAP[key]
+            if isinstance(factor, tuple) and factor[0] == "temp":
+                out = factor[1](val)
+            else:
+                out = val * factor
+            return {"answer": f"{val} {src} ≈ {round(out, 4)} {dst}",
+                    "bullets": [f"تحويل {src}→{dst}", f"القيمة التقريبية: {round(out,4)}"], "sources": []}
+
+    # 3) الوقت في مدينة
+    city = parse_time_city(q_stripped)
+    if city:
+        tz = CITY_TZ.get(city) or CITY_TZ.get(city.capitalize())
+        if tz:
+            now = dt.datetime.now(ZoneInfo(tz))
+            return {"answer": f"الوقت الآن في {city}: {now.strftime('%Y-%m-%d %H:%M')}",
+                    "bullets": [f"المنطقة الزمنية: {tz}"], "sources": []}
+
+    # 4) بلد/مدينة/تعريف سريع (ويكيبيديا)
+    geo = parse_country_city_q(q_stripped)
+    if geo:
+        term = geo["term"]
+        summary, link, facts = await wiki_summary(term, "ar")
+        if summary:
+            bullets = []
+            if geo["ask"] == "where":
+                bullets.append(f"الموقع: {facts.get('region','—')}")
+            if facts.get("capital"):
+                bullets.append(f"العاصمة: {facts['capital']}")
+            bullets += make_bullets([summary], max_items=6)
+            return {"answer": summary, "bullets": bullets, "sources": [{"title": f"Wikipedia — {term}", "link": link or ""}]}
+
+    # 5) تعريف عام من ويكيبيديا لو بدأ بـ ما هو/هي
+    if re.match(r"^(ما\s+هو|ما\s+هي)\s+", q_stripped):
+        term = re.sub(r"^(ما\s+هو|ما\s+هي)\s+", "", q_stripped).strip()
+        if term:
+            summary, link, _ = await wiki_summary(term, "ar")
+            if summary:
+                return {"answer": summary, "bullets": make_bullets([summary], max_items=6),
+                        "sources": [{"title": f"Wikipedia — {term}", "link": link or ""}]}
+
+    return None  # لم تُكتشف مهارة
+
+# ============================= البحث (كما هو عندك)
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     if not SERPER_API_KEY:
         raise RuntimeError("No SERPER_API_KEY configured")
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
     payload = {"q": q, "num": num, "hl": "ar"}
-    async with httpx.AsyncClient(timeout=25) as client_httpx:
-        r = await client_httpx.post(url, headers=headers, json=payload)
-        r.raise_for_status(); data = r.json()
+    async with httpx.AsyncClient(timeout=25) as ax:
+        r = await ax.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
     out = []
     for it in (data.get("organic", []) or [])[:num]:
         out.append({"title": it.get("title"), "link": it.get("link"),
@@ -338,23 +278,24 @@ def search_duckduckgo(q: str, num: int = 6) -> List[Dict]:
             if len(out) >= num: break
     return out
 
-async def smart_search(q: str, num: int = 6) -> Dict:
-    q = (q or "").strip()
+def make_bullets_from_results(results: List[Dict]) -> List[str]:
+    return make_bullets([r.get("snippet") for r in results], max_items=8)
+
+async def smart_search(q: str, num: int = 8) -> Dict:
     try:
-        used, results = None, []
         if SERPER_API_KEY:
             try:
-                results = await search_google_serper(q, num); used = "Google"
+                res = await search_google_serper(q, num); used = "Google"
             except Exception:
-                results = search_duckduckgo(q, num); used = "DuckDuckGo"
+                res = search_duckduckgo(q, num); used = "DuckDuckGo"
         else:
-            results = search_duckduckgo(q, num); used = "DuckDuckGo"
-        bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
-        return {"ok": True, "used": used, "bullets": bullets, "results": results}
+            res = search_duckduckgo(q, num); used = "DuckDuckGo"
+        return {"ok": True, "used": used, "results": res, "bullets": make_bullets_from_results(res)}
     except Exception as e:
-        traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
+        traceback.print_exc()
+        return {"ok": False, "used": None, "results": [], "error": str(e)}
 
-# ============================== صفحات HTML
+# ============================= الصفحات
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -363,47 +304,26 @@ def home(request: Request):
 def health():
     return {"ok": True}
 
-# ============================== بحث نصي
+# ============================= نقاط الإدخال مع SkillRouter أولاً
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
     q = (q or "").strip()
     if not q:
         return templates.TemplateResponse("index.html", {"request": request, "error": "📝 الرجاء كتابة سؤالك أولًا."})
 
-    # SmartNLP قبل أي شيء: إعادة كتابة السؤال وكشف نوايا سريعة
-    pp = smart_preprocess(q)
-    q_for_search = pp["query_rewritten"] or q
-    if pp.get("handled"):
+    # 1) جرّب المهارات أولاً
+    handled = await skill_router(q)
+    if handled:
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q, engine_used="SmartNLP")
-        ctx = {"request": request, "query": q, "engine_used": "SmartNLP",
-               "results": [], "bullets": make_bullets([pp["handled"]["answer"]], max_items=4)}
+        log_event("search", ip, ua, query=q, engine_used="Skills")
+        ctx = {"request": request, "query": q, "engine_used": "Skills",
+               "results": handled.get("sources", []),
+               "bullets": handled.get("bullets") or make_bullets([handled.get("answer","")], max_items=6)}
         return templates.TemplateResponse("index.html", ctx)
 
-    # تعريفات ثابتة القديمة (ما زالت تعمل)
-    if is_intro_query(q):
-        ip = request.client.host if request.client else "?"
-        ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q, engine_used="CANNED_INTRO")
-        ctx = {"request": request, "query": q, "engine_used": "CANNED_INTRO", "results": [], "bullets": [INTRO_ANSWER]}
-        return templates.TemplateResponse("index.html", ctx)
-
-    if is_bassam_query(q):
-        ip = request.client.host if request.client else "?"
-        ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q, engine_used="CANNED")
-        ctx = {"request": request, "query": q, "engine_used": "CANNED", "results": [], "bullets": [CANNED_ANSWER]}
-        return templates.TemplateResponse("index.html", ctx)
-
-    if is_sensitive_personal_query(q):
-        ip = request.client.host if request.client else "?"
-        ua = request.headers.get("user-agent", "?")
-        log_event("search", ip, ua, query=q, engine_used="CANNED_PRIVACY")
-        ctx = {"request": request, "query": q, "engine_used": "CANNED_PRIVACY", "results": [], "bullets": [SENSITIVE_PRIVACY_ANSWER]}
-        return templates.TemplateResponse("index.html", ctx)
-
-    result = await smart_search(q_for_search, num=8)
+    # 2) وإلا نرجع للبحث العادي
+    result = await smart_search(q, num=8)
     ip = request.client.host if request.client else "?"
     ua = request.headers.get("user-agent", "?")
     log_event("search", ip, ua, query=q, engine_used=result.get("used"))
@@ -416,7 +336,6 @@ async def search(request: Request, q: str = Form(...)):
         ctx["error"] = f"⚠️ حدث خطأ في البحث: {result.get('error')}"
     return templates.TemplateResponse("index.html", ctx)
 
-# ============================== رفع صورة + روابط عدسات
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_image(request: Request, file: UploadFile = File(...)):
     try:
@@ -424,10 +343,10 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
             return templates.TemplateResponse("index.html", {"request": request, "error": "لم يتم اختيار صورة."})
 
         ext = (file.filename.split(".")[-1] or "jpg").lower()
-        if ext not in ["jpg", "jpeg", "png", "webp", "gif"]: ext = "jpg"
+        if ext not in ["jpg","jpeg","png","webp","gif"]: ext = "jpg"
         filename = f"{uuid.uuid4().hex}.{ext}"
         save_path = os.path.join(UPLOADS_DIR, filename)
-        with open(save_path, "wb") as f:  f.write(await file.read())
+        with open(save_path, "wb") as f: f.write(await file.read())
 
         public_base = PUBLIC_BASE_URL or str(request.base_url).rstrip("/")
         image_url = f"{public_base}/uploads/{filename}"
@@ -439,16 +358,15 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         ua = request.headers.get("user-agent", "?")
         log_event("image", ip, ua, file_name=filename)
 
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, "uploaded_image": filename, "google_lens": google_lens,
-             "bing_visual": bing_visual, "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇"}
-        )
+        return templates.TemplateResponse("index.html", {
+            "request": request, "uploaded_image": filename, "google_lens": google_lens,
+            "bing_visual": bing_visual, "message": "تم رفع الصورة بنجاح ✅، اختر طريقة البحث 👇"
+        })
     except Exception as e:
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
-# ============================== API: ردّ الذكاء (محلي أولاً ثم OpenAI كاحتياط)
+# ============================= API JSON (يستفيد من المهارات أيضاً)
 @app.post("/api/ask")
 async def api_ask(request: Request):
     try:
@@ -457,115 +375,33 @@ async def api_ask(request: Request):
         if not q:
             return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
-        # SmartNLP أولاً
-        pp = smart_preprocess(q)
-        q_for_search = pp["query_rewritten"] or q
-        if pp.get("handled"):
+        handled = await skill_router(q)
+        if handled:
             ip = request.client.host if request.client else "?"
             ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="SmartNLP")
-            ans = pp["handled"]["answer"]
-            return JSONResponse({"ok": True, "engine_used": "SmartNLP",
-                                 "answer": ans, "bullets": make_bullets([ans], max_items=5),
-                                 "sources": []})
+            log_event("ask", ip, ua, query=q, engine_used="Skills")
+            return JSONResponse({"ok": True, "engine_used": "Skills",
+                                 "answer": handled.get("answer",""),
+                                 "bullets": handled.get("bullets", []),
+                                 "sources": handled.get("sources", [])})
 
-        # ردود ثابتة
-        if is_intro_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED_INTRO")
-            return JSONResponse({"ok": True, "engine_used": "CANNED_INTRO",
-                                 "answer": INTRO_ANSWER,
-                                 "bullets": make_bullets([INTRO_ANSWER], max_items=3),
-                                 "sources": []})
-
-        if is_bassam_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED")
-            return JSONResponse({"ok": True, "engine_used": "CANNED",
-                                 "answer": CANNED_ANSWER,
-                                 "bullets": make_bullets([CANNED_ANSWER], max_items=4),
-                                 "sources": []})
-
-        if is_sensitive_personal_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
-            return JSONResponse({"ok": True, "engine_used": "CANNED_PRIVACY",
-                                 "answer": SENSITIVE_PRIVACY_ANSWER,
-                                 "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
-                                 "sources": []})
-
-        # نتائج بحث مختصرة لاستخدامها كـ context
-        search = await smart_search(q_for_search, num=6)
+        # لا توجد مهارة → استخدم البحث
+        search = await smart_search(q, num=6)
         sources = search.get("results", [])
-        context_lines = []
-        for i, r in enumerate(sources, start=1):
-            title = (r.get("title") or "").strip()
-            link = (r.get("link") or "").strip()
-            snippet = (r.get("snippet") or "").strip()
-            context_lines.append(f"{i}. {title}\n{snippet}\n{link}")
-
-        ip = request.client.host if request.client else "?"
-        ua = request.headers.get("user-agent", "?")
-
-        # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
-        local_first = (USE_LOCAL_FIRST == "1") or (not client)
-        if local_first:
-            local = await ask_local_llm(q, context_lines)
-            if local.get("ok"):
-                log_event("ask", ip, ua, query=q, engine_used="Local")
-                answer = local["answer"]
-                bullets = make_bullets([answer], max_items=8)
-                return JSONResponse({"ok": True, "engine_used": "Local",
-                                     "answer": answer, "bullets": bullets, "sources": sources})
-            if not client:
-                return JSONResponse({
-                    "ok": True, "engine_used": search.get("used"),
-                    "answer": "⚠️ تعذر الاتصال بالنموذج المحلي، أعرض لك ملخصًا من النتائج.",
-                    "bullets": search.get("bullets", []), "sources": sources
-                })
-
-        # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
-        if client:
-            system_msg = (
-                "You are a helpful assistant. ALWAYS respond in the SAME language as the user's question. "
-                "كن موجزًا وواضحًا، واستخدم نقاطًا مختصرة عند الحاجة. "
-                "اعتمد على المعلومات التالية من نتائج البحث كمراجع، وإن لم تكن واثقًا قل: لا أعلم."
-            )
-            user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
-
-            resp = client.chat.completions.create(
-                model=LLM_MODEL or "gpt-5-mini",
-                messages=[{"role": "system", "content": system_msg},
-                          {"role": "user", "content": user_msg}],
-                temperature=0.3, max_tokens=600,
-            )
-            answer = (resp.choices[0].message.content or "").strip()
-            bullets = make_bullets([answer], max_items=8)
-
-            log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
-            return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
-                                 "answer": answer, "bullets": bullets, "sources": sources})
-
-        # 3) لا محلي ولا OpenAI
-        return JSONResponse({
-            "ok": True, "engine_used": search.get("used"),
-            "answer": "⚠️ لا يوجد اتصال بنموذج محلي ولا OpenAI، أعرض ملخصًا من النتائج.",
-            "bullets": search.get("bullets", []), "sources": sources
-        })
-
+        bullets = search.get("bullets", [])
+        return JSONResponse({"ok": True, "engine_used": search.get("used"),
+                             "answer": "نتيجة منسقة من البحث.",
+                             "bullets": bullets, "sources": sources})
     except Exception as e:
-        traceback.print_exc();  return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-# ============================== Service Workers
+# ============================= Service Workers و OneSignal و Matches (كما هي عندك)
 @app.get("/sw.js")
 def sw_js():
     path = os.path.join(STATIC_DIR, "pwa", "sw.js")
     return FileResponse(path, media_type="application/javascript")
 
-# ⚠️ مسارات OneSignal workers على جذر الموقع
 @app.get("/OneSignalSDKWorker.js")
 def onesignal_worker_root():
     path = os.path.join(STATIC_DIR, "onesignal", "OneSignalSDKWorker.js")
@@ -576,150 +412,25 @@ def onesignal_updater_root():
     path = os.path.join(STATIC_DIR, "onesignal", "OneSignalSDKUpdaterWorker.js")
     return FileResponse(path, media_type="application/javascript")
 
-# ============================== Deeplink (فتح البث في ياسين/جنرال)
 @app.get("/deeplink", response_class=HTMLResponse)
 def deeplink(request: Request, match: Optional[str] = None):
     ctx = {"request": request, "mat": (match or "").strip(),
-           "yacine_pkg": YACINE_PACKAGE, "general_pkg": GENERAL_PACKAGE,
-           "yacine_scheme": YACINE_SCHEME, "general_scheme": GENERAL_SCHEME}
-    tpl_path = os.path.join(TEMPLATES_DIR, "deeplink.html")
-    if os.path.exists(tpl_path):
-        return templates.TemplateResponse("deeplink.html", ctx)
-    html = f"""
-    <!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"/>
+           "yacine_pkg": "com.yacine.app", "general_pkg": "com.general.live",
+           "yacine_scheme": "yacine", "general_scheme": "general"}
+    html = f"""<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"/>
     <body style="text-align:center;padding-top:60px;font-family:sans-serif;background:#0b0f19;color:#fff">
-      <h2>جاري فتح القناة…</h2>
-      <p>{ctx['mat']}</p>
-      <p><a style="color:#7cf" href="intent://open#Intent;scheme={YACINE_SCHEME};package={YACINE_PACKAGE};end">افتح في ياسين</a></p>
-      <p><a style="color:#7cf" href="intent://open#Intent;scheme={GENERAL_SCHEME};package={GENERAL_PACKAGE};end">افتح في جنرال</a></p>
-    </body></html>
-    """
+      <h2>جاري فتح القناة…</h2><p>{ctx['mat']}</p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme={ctx['yacine_scheme']};package={ctx['yacine_pkg']};end">افتح في ياسين</a></p>
+      <p><a style="color:#7cf" href="intent://open#Intent;scheme={ctx['general_scheme']};package={ctx['general_pkg']};end">افتح في جنرال</a></p>
+    </body></html>"""
     return HTMLResponse(html)
 
-# ============================== لوحة الإدارة
-def make_token(password: str) -> str:
-    return hashlib.sha256((password + "|" + ADMIN_SECRET).encode("utf-8")).hexdigest()
-ADMIN_TOKEN = make_token(ADMIN_PASSWORD)
-
-def is_admin(request: Request) -> bool:
-    return request.cookies.get("bb_admin") == ADMIN_TOKEN
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_home(request: Request, login: Optional[int] = None):
-    if not is_admin(request):
-        return templates.TemplateResponse("admin.html", {"request": request, "page": "login", "error": None, "login": True})
-    with db() as con:
-        rows = con.execute("SELECT * FROM logs ORDER BY id DESC LIMIT 200").fetchall()
-    return templates.TemplateResponse("admin.html", {"request": request, "page": "dashboard", "rows": rows, "count": len(rows)})
-
-@app.post("/admin/login")
-def admin_login(request: Request, password: str = Form(...)):
-    if make_token(password) == ADMIN_TOKEN:
-        resp = RedirectResponse(url="/admin", status_code=302)
-        resp.set_cookie("bb_admin", ADMIN_TOKEN, httponly=True, samesite="lax")
-        return resp
-    return templates.TemplateResponse("admin.html", {"request": request, "page": "login", "error": "❌ كلمة المرور غير صحيحة", "login": True})
-
-@app.get("/admin/logout")
-def admin_logout():
-    resp = RedirectResponse(url="/admin?login=1", status_code=302)
-    resp.delete_cookie("bb_admin")
-    return resp
-
-@app.get("/admin/export.csv")
-def admin_export(request: Request):
-    if not is_admin(request):
-        return RedirectResponse(url="/admin?login=1", status_code=302)
-    with db() as con:
-        cur = con.execute("SELECT id, ts, type, query, file_name, engine_used, ip, ua FROM logs ORDER BY id DESC")
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["id","ts","type","query","file_name","engine_used","ip","user_agent"])
-        for row in cur:
-            writer.writerow([
-                row["id"], row["ts"], row["type"], row["query"] or "",
-                row["file_name"] or "", row["engine_used"] or "", row["ip"] or "", row["ua"] or ""
-            ])
-        output.seek(0)
-    return StreamingResponse(iter([output.read()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
-
-# ============================== إرسال إشعارات يدوية من لوحة الإدارة (اختياري)
-@app.get("/admin/push-test")
-def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي", body: str = "مرحبًا! هذا إشعار من بسام الذكي"):
-    if not is_admin(request):
-        return RedirectResponse(url="/admin?login=1", status_code=302)
-    ok = send_push(title, body, "/")
-    return JSONResponse({"ok": ok})
-
-@app.get("/admin/push-match")
-def admin_push_match(request: Request,
-                     home: str = "Al Hilal",
-                     away: str = "Al Nassr",
-                     before: bool = True):
-    if not is_admin(request):
-        return RedirectResponse(url="/admin?login=1", status_code=302)
-    if before:
-        title = f"⏰ بعد 30 دقيقة: {home} × {away}"
-        body = "جاهزين؟"
-    else:
-        title = f"🎬 بدأت الآن: {home} × {away}"
-        body = "انطلقت المباراة!"
-    deeplink_path = f"/deeplink?match={quote(f'{home} vs {away}')}"
-    ok = send_push(title, body, deeplink_path)
-    return JSONResponse({"ok": ok})
-
-# ============================== مباريات اليوم + إشعارات OneSignal (بتوقيت مكة)
-def _to_local(date_str: str, time_str: str) -> dt.datetime:
-    t = (time_str or "00:00:00").split("+")[0]
-    naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
-    if naive.tzinfo is None:
-        naive = naive.replace(tzinfo=dt.timezone.utc)
-    return naive.astimezone(TZ)
-
-def fetch_today_matches() -> List[Dict]:
-    today = dt.date.today()
-    s_today = today.strftime("%Y-%m-%d")
-    matches: List[Dict] = []
-    with httpx.Client(timeout=20) as client:
-        for lid in LEAGUE_IDS:
-            lname = LEAGUE_NAME_BY_ID.get(lid)
-            if not lname:
-                continue
-            url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={s_today}&l={quote(lname)}"
-            try:
-                data = client.get(url).json()
-            except Exception:
-                continue
-            for e in (data or {}).get("events", []) or []:
-                home, away = e.get("strHomeTeam"), e.get("strAwayTeam")
-                if not (home and away):
-                    continue
-                kickoff = _to_local(e.get("dateEvent"), e.get("strTime") or "00:00:00")
-                matches.append({
-                    "id": e.get("idEvent"),
-                    "league": e.get("strLeague") or lname,
-                    "home": home, "away": away,
-                    "kickoff": kickoff,
-                    "venue": e.get("strVenue") or "",
-                    "click_url": f"/deeplink?match={quote(f'{home} vs {away}')}"
-                })
-    matches.sort(key=lambda x: x["kickoff"])
-    return matches
-
 def send_push(title: str, body: str, url_path: str = "/") -> bool:
-    if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY):
-        return False
+    if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY): return False
     full_url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
-    payload = {
-        "app_id": ONESIGNAL_APP_ID,
-        "included_segments": ["Subscribed Users"],
-        "headings": {"ar": title, "en": title},
-        "contents": {"ar": body, "en": body},
-        "url": full_url,
-    }
-    headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}",
-               "Content-Type": "application/json; charset=utf-8"}
+    payload = {"app_id": ONESIGNAL_APP_ID, "included_segments": ["Subscribed Users"],
+               "headings": {"ar": title, "en": title}, "contents": {"ar": body, "en": body}, "url": full_url}
+    headers = {"Authorization": f"Bearer {ONESIGNAL_REST_API_KEY}", "Content-Type": "application/json; charset=utf-8"}
     try:
         with httpx.Client(timeout=20) as client:
             r = client.post("https://api.onesignal.com/notifications", headers=headers, json=payload)
@@ -727,10 +438,36 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
     except Exception:
         return False
 
+def _to_local(date_str: str, time_str: str) -> dt.datetime:
+    t = (time_str or "00:00:00").split("+")[0]
+    naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
+    if naive.tzinfo is None: naive = naive.replace(tzinfo=dt.timezone.utc)
+    return naive.astimezone(TZ)
+
+def fetch_today_matches() -> List[Dict]:
+    today = dt.date.today()
+    s_today = today.strftime("%Y-%m-%d")
+    matches: List[Dict] = []
+    with httpx.Client(timeout=20) as client:
+        for lid, lname in LEAGUE_NAME_BY_ID.items():
+            url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={s_today}&l={quote(lname)}"
+            try:
+                data = client.get(url).json()
+            except Exception:
+                continue
+            for e in (data or {}).get("events", []) or []:
+                home, away = e.get("strHomeTeam"), e.get("strAwayTeam")
+                if not (home and away): continue
+                kickoff = _to_local(e.get("dateEvent"), e.get("strTime") or "00:00:00")
+                matches.append({"id": e.get("idEvent"), "league": e.get("strLeague") or lname,
+                                "home": home, "away": away, "kickoff": kickoff, "venue": e.get("strVenue") or "",
+                                "click_url": f"/deeplink?match={quote(f'{home} vs {away}')}"} )
+    matches.sort(key=lambda x: x["kickoff"])
+    return matches
+
 def job_daily_digest_15():
     matches = fetch_today_matches()
-    if not matches:
-        return
+    if not matches: return
     lines = [f"{m['kickoff'].strftime('%H:%M')} - {m['home']} × {m['away']} ({m['league']})" for m in matches]
     title = f"مباريات اليوم {dt.date.today().strftime('%Y-%m-%d')}"
     body = "\n".join(lines[:10])
@@ -738,17 +475,17 @@ def job_daily_digest_15():
 
 def job_half_hour_and_kickoff():
     matches = fetch_today_matches()
-    if not matches:
-        return
+    if not matches: return
     now = dt.datetime.now(TZ)
     for m in matches:
         mins = int((m["kickoff"] - now).total_seconds() // 60)
         if 25 <= mins <= 35:
-            send_push(f"⏰ بعد 30 دقيقة: {m['home']} × {m['away']}",
-                      f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"⏰ بعد 30 دقيقة: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
         if -2 <= mins <= 2:
-            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}",
-                      f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
