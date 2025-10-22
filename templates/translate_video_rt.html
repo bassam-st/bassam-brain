@@ -1,115 +1,80 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>الترجمة الحيّة للفيديو</title>
-  <link rel="stylesheet" href="/static/style.css"/>
-  <style>
-    body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif;margin:0}
-    .wrap{max-width:960px;margin:24px auto;padding:0 14px}
-    .card{background:#121826;border-radius:18px;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    h1{margin:6px 0 14px;font-size:28px}
-    .row{display:flex;gap:10px;flex-wrap:wrap}
-    input[type="url"]{flex:1;min-width:260px;padding:12px 14px;border-radius:12px;border:none;background:#0f1421;color:#fff}
-    button{padding:12px 16px;border-radius:12px;border:none;background:#7c3aed;color:#fff;font-weight:700;cursor:pointer}
-    button:hover{background:#6d28d9}
-    .muted{color:#98a2b3}
-    #log{margin-top:14px}
-    #player{margin-top:16px}
-    video{width:100%;max-height:60vh;border-radius:12px;background:#000}
-    .subs{margin-top:10px;min-height:40px;background:#0f1220;border:1px solid #2a2f45;border-radius:10px;padding:10px 12px;line-height:1.8}
-    .line{background:#1f2937;border-radius:8px;padding:6px 10px;display:inline-block}
-    a{color:#c4b5fd;text-decoration:none}
-    a:hover{text-decoration:underline}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>🎧 الترجمة الحيّة للفيديو</h1>
-      <p class="muted">ألصِق رابط فيديو (YouTube/Twitch/MP4/M3U8…) ثم اضغط "ابدأ".</p>
+<script>
+const $ = s => document.querySelector(s);
+const log = m => $('#log').textContent = m || '';
 
-      <form id="f" class="row">
-        <button type="submit">ابدأ</button>
-        <input id="url" type="url" placeholder="https://..." required/>
-      </form>
+function escapeHtml(s){
+  return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
-      <div id="log" class="muted"></div>
-      <div id="player"></div>
-    </div>
-  </div>
+async function start(e){
+  e.preventDefault();
+  const videoUrl = $('#url').value.trim();
+  if(!videoUrl){ return; }
+  log('جارٍ بدء الجلسة…');
 
-  <script>
-  const $ = s => document.querySelector(s);
-  const log = m => $('#log').textContent = m || '';
-
-  function escapeHtml(s){
-    return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  async function start(e){
-    e.preventDefault();
-    const videoUrl = $('#url').value.trim();
-    if(!videoUrl){ return; }
-    log('جارٍ بدء الجلسة…');
-
-    // 1) ابدأ جلسة الترجمة الحيّة (المسار الموجود لديك مسبقًا)
+  // ابدأ جلسة الترجمة (كما كانت)
+  let sid = null;
+  try{
     const fd = new FormData(); fd.append('video_url', videoUrl);
     const sres = await fetch('/rt/start', { method:'POST', body: fd });
-    const sj = await sres.json().catch(()=>({ok:false,error:'bad json'}));
-    if(!sj || !sj.ok || !sj.sid){
-      log('تعذر بدء جلسة الترجمة: ' + (sj && sj.error ? sj.error : ''));
-      // حتى لو فشلت، سنحاول عرض الفيديو — لكن الترجمة لن تعمل بدون جلسة
-    } else {
+    const sj = await sres.json();
+    if(sj && sj.ok && sj.sid){
+      sid = sj.sid;
       log('متصل… يتم الاستماع للصوت وترجمته');
-    }
-
-    // 2) حاول استخراج رابط تشغيل مباشر عبر /resolve
-    let playable = null;
-    try{
-      const r = await fetch('/resolve?video_url=' + encodeURIComponent(videoUrl));
-      const j = await r.json();
-      if(j.ok && j.url){ playable = j.url; }
-    }catch(_){}
-
-    if(playable){
-      $('#player').innerHTML =
-        '<video id="vid" src="'+playable+'" controls autoplay playsinline></video>' +
-        '<div class="subs" id="subs"></div>';
     }else{
-      // لو فشل الاستخراج/التضمين: نعرض رابط فتح خارجي ونبقي صندوق الترجمة
-      $('#player').innerHTML =
-        '<div style="padding:12px;background:#0f1220;border:1px solid #2a2f45;border-radius:10px">' +
-        'تعذّر تضمين الفيديو داخل الصفحة (غالبًا قيود من المصدر). ' +
-        '<a target="_blank" href="'+videoUrl+'">فتح الفيديو في تبويب جديد</a>' +
-        '</div>' +
-        '<div class="subs" id="subs"></div>';
+      log('تعذر بدء جلسة الترجمة: ' + (sj && sj.error ? sj.error : ''));
     }
-
-    // 3) افتح WebSocket لتلقّي السطور المترجمة حيًا (المسار الموجود لديك)
-    if(sj && sj.sid){
-      const wsProto = (location.protocol === 'https:') ? 'wss' : 'ws';
-      const ws = new WebSocket(wsProto + '://' + location.host + '/ws/' + sj.sid);
-
-      ws.onmessage = ev => {
-        try{
-          const d = JSON.parse(ev.data);
-          if(d.type === 'line'){
-            // d.ar إن كان متاحًا، وإلا نعرض المصدر
-            $('#subs').innerHTML = '<span class="line">' + escapeHtml(d.ar || d.src || '') + '</span>';
-          }else if(d.type === 'error'){
-            log('خطأ: ' + d.error);
-          }else if(d.type === 'done'){
-            log('انتهى البث.');
-          }
-        }catch(e){}
-      };
-      ws.onclose = ()=> log('انتهى الاتصال');
-    }
+  }catch(err){
+    log('تعذر بدء جلسة الترجمة: ' + (err && err.message ? err.message : err));
   }
 
-  document.getElementById('f').addEventListener('submit', start);
-  </script>
-</body>
-</html>
+  // دائماً وفر زر فتح خارجي + صندوق الترجمة
+  $('#player').innerHTML =
+    '<div style="padding:12px;background:#0f1220;border:1px solid #2a2f45;border-radius:10px;margin-bottom:10px">' +
+    'رابط الفيديو: <a target="_blank" href="'+videoUrl+'">فتح في تبويب جديد</a>' +
+    '</div>' +
+    '<div id="innerPlayer"></div>' +
+    '<div class="subs" id="subs"></div>';
+
+  // حاول استخراج رابط مباشر
+  let playable = null, resolveErr = null;
+  try{
+    const r = await fetch('/resolve?video_url=' + encodeURIComponent(videoUrl));
+    const j = await r.json();
+    if(j.ok && j.url){ playable = j.url; }
+    else resolveErr = j.error || 'لم يتم العثور على رابط تشغيل مباشر';
+  }catch(err){ resolveErr = err && err.message ? err.message : String(err); }
+
+  if(playable){
+    $('#innerPlayer').innerHTML =
+      '<video id="vid" src="'+playable+'" controls autoplay playsinline></video>';
+  }else{
+    $('#innerPlayer').innerHTML =
+      '<div style="padding:10px;border-radius:10px;border:1px dashed #475569;color:#98a2b3">' +
+      'تعذّر تشغيل الفيديو داخل الصفحة. السبب: ' + escapeHtml(resolveErr || 'غير معروف') +
+      '<br/>يمكنك المشاهدة في التبويب الخارجي، وستبقى الترجمة الحية هنا.' +
+      '</div>';
+  }
+
+  // افتح WebSocket للترجمة
+  if(sid){
+    const wsProto = (location.protocol === 'https:') ? 'wss' : 'ws';
+    const ws = new WebSocket(wsProto + '://' + location.host + '/ws/' + sid);
+    ws.onmessage = ev => {
+      try{
+        const d = JSON.parse(ev.data);
+        if(d.type === 'line'){
+          $('#subs').innerHTML = '<span class="line">' + escapeHtml(d.ar || d.src || '') + '</span>';
+        }else if(d.type === 'error'){
+          log('خطأ: ' + d.error);
+        }else if(d.type === 'done'){
+          log('انتهى البث.');
+        }
+      }catch(e){}
+    };
+    ws.onclose = ()=> log('انتهى الاتصال');
+  }
+}
+
+document.getElementById('f').addEventListener('submit', start);
+</script>
