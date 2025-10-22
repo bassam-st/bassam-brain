@@ -1,52 +1,99 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>الترجمة الحية للفيديو</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🎧 الترجمة الحيّة للفيديو</title>
   <style>
-    body{background:#0b0f19;color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Naskh Arabic UI","Noto Kufi Arabic",Tahoma,Arial,sans-serif;margin:0}
-    .wrap{max-width:860px;margin:24px auto;background:#121826;border-radius:18px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    h1{margin:0 0 12px}
-    .row{display:flex;gap:10px;flex-wrap:wrap}
-    input[type="url"]{flex:1;min-width:240px;padding:12px 14px;border-radius:12px;border:none;background:#0f1421;color:#fff;direction:ltr}
-    button{padding:12px 16px;border-radius:12px;border:none;background:#7c3aed;color:#fff;font-weight:700;cursor:pointer}
-    .muted{color:#98a2b3;font-size:13px;margin-top:8px}
-    #status{margin-top:14px}
+    body {
+      background-color:#0b0f19;
+      color:#e6e6ff;
+      font-family:system-ui, sans-serif;
+      text-align:center;
+      padding:40px;
+    }
+    h1 {
+      color:#b197fc;
+    }
+    input[type="url"] {
+      width:80%;
+      padding:12px;
+      margin:12px 0;
+      border-radius:12px;
+      border:none;
+      outline:none;
+      background:#121826;
+      color:white;
+      text-align:left;
+    }
+    button {
+      padding:12px 20px;
+      border:none;
+      border-radius:12px;
+      background:#6d5dfc;
+      color:white;
+      font-weight:bold;
+      cursor:pointer;
+    }
+    button:active {
+      transform:scale(0.97);
+    }
+    #resultBox {
+      margin-top:24px;
+      background:#101622;
+      padding:20px;
+      border-radius:16px;
+      white-space:pre-wrap;
+      text-align:right;
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>🎧 الترجمة الحيّة للفيديو</h1>
-    <p class="muted">الصق رابط الفيديو (يوتيوب/تويتش/فيسبوك…)، ثم اضغط “ابدأ”.</p>
+  <h1>🎧 الترجمة الحيّة للفيديو</h1>
+  <p>ألصق رابط الفيديو (يوتيوب / تويتر / فيسبوك...) ثم اضغط "ابدأ" لترجمة محتوى الصوت فورًا إلى العربية.</p>
+  
+  <form id="videoForm">
+    <input id="videoUrl" type="url" placeholder="https://..." required />
+    <button type="submit">ابدأ</button>
+  </form>
 
-    <form id="urlForm" class="row" onsubmit="startRT(event)">
-      <input id="videoUrl" type="url" placeholder="https://..." required />
-      <button type="submit">ابدأ</button>
-    </form>
-
-    <div id="status" class="muted"></div>
-
-    <div id="subs" style="margin-top:16px;white-space:pre-wrap;line-height:1.8;background:#0f1220;border:1px solid #2a2f45;border-radius:12px;padding:12px;"></div>
-  </div>
+  <div id="status"></div>
+  <div id="resultBox"></div>
 
   <script>
-    async function startRT(e){
-      e.preventDefault();
-      const url = document.getElementById('videoUrl').value.trim();
-      const status = document.getElementById('status');
-      const subs = document.getElementById('subs');
-      subs.textContent = '';
-      if(!url){ return; }
-      status.textContent = 'جاري الاتصال…';
+    const form = document.getElementById("videoForm");
+    const statusEl = document.getElementById("status");
+    const resultBox = document.getElementById("resultBox");
 
-      // إذا كان عندك WebSocket/Endpoint جاهز للريل تايم استبدل المسار هنا
-      // مثال WebSocket: ws://HOST/ws/rt?video_url=...
-      // مؤقتًا نعرض فقط أننا التقطنا الرابط بنجاح:
-      status.textContent = 'تم التقاط الرابط ✅ سيتم البدء بالترجمة الحية عندما يكتمل الربط بالخلفية.';
-      // ملاحظة: الربط الفعلي يعتمد على الكود في باك-إند الريل تايم (Vosk/WebSocket).
-    }
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = document.getElementById("videoUrl").value.trim();
+      if (!url) return alert("الرجاء إدخال رابط الفيديو أولاً.");
+      
+      statusEl.innerHTML = "⏳ جاري تحليل الفيديو واستخراج الصوت...";
+      resultBox.textContent = "";
+      
+      try {
+        const formData = new FormData();
+        formData.append("video_url", url);
+        const res = await fetch("/api/translate_video", {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (data.error) {
+          statusEl.innerHTML = "❌ خطأ: " + data.error;
+        } else {
+          statusEl.innerHTML = "✅ تم استخراج الصوت وترجمته:";
+          resultBox.innerHTML =
+            "<b>النص الأصلي:</b><br>" + data.original + "<br><hr>" +
+            "<b>الترجمة:</b><br>" + data.translated;
+        }
+      } catch (err) {
+        statusEl.innerHTML = "❌ حدث خطأ أثناء الاتصال بالخادم.";
+        console.error(err);
+      }
+    });
   </script>
 </body>
 </html>
