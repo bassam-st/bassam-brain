@@ -22,3 +22,4 @@ youtube-transcript-api==0.6.2
 vosk==0.3.45
 ffmpeg-python
 websockets
+gunicorn
