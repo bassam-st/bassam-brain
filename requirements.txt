@@ -11,15 +11,3 @@ openai==1.44.0
 apscheduler==3.10.4
 diskcache==5.6.3
 python-dotenv==1.0.1
-gunicorn==21.2.0
-readability-lxml==0.8.1
-lxml==5.3.0
-langdetect==1.0.9
-rapidfuzz==3.9.7
-moviepy==1.0.3
-yt-dlp==2024.5.27
-youtube-transcript-api==0.6.2
-vosk==0.3.45
-ffmpeg-python
-websockets
-gunicorn
