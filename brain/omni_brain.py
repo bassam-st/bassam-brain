@@ -2,7 +2,7 @@
 # مولد إجابة عربي احترافي بدون LLM مدفوع — تجميعي/تحليلي/تلخيصي من نتائج البحث (مجاني 100%)
 
 from __future__ import annotations
-import re, html, hashlib
+import re, html, hashlib, math
 from typing import List, Dict, Any, Tuple, Optional
 from urllib.parse import urlparse
 
@@ -21,18 +21,20 @@ SENSITIVE_PERSONAL = [
 ]
 
 def _is_haram(q: str) -> bool:
-    qn = re.sub(r"\s+", "", q.lower())
+    qn = re.sub(r"\s+", "", (q or "").lower())
     for w in HARAM_WORDS:
         if w.replace(" ", "") in qn:
             return True
     return False
 
 def _is_sensitive(q: str) -> bool:
-    qn = q.strip().lower()
+    qn = (q or "").strip().lower()
     return any(re.search(p, qn) for p in SENSITIVE_PERSONAL)
 
 # =========================== أدوات نصية ===========================
 _AR_DIAC = r"ًٌٍَُِّْ"
+MONTHS = r"(يناير|فبراير|مارس|ابريل|أبريل|مايو|يونيو|يوليو|اغسطس|أغسطس|سبتمبر|اكتوبر|أكتوبر|نوفمبر|ديسمبر)"
+
 def _norm_ar(s: str) -> str:
     s = s or ""
     s = s.strip()
@@ -47,13 +49,13 @@ def _clean(s: str) -> str:
     return s
 
 def _sentences(text: str) -> List[str]:
+    """تقسيم جُمَل بسيط يدعم العربية/الإنجليزية، مع فلترة الجمل القصيرة جدًا."""
     if not text:
         return []
-    # تقسيم جُمَل بسيط يدعم العربية/الإنجليزية
-    parts = re.split(r"(?<=[\.\!\؟\?])\s+|[\n\r]+", text)
-    out = []
+    parts = re.split(r"(?<=[\.\!\؟\?])\s+|[\n\r]+| • | - ", text)
+    out: List[str] = []
     for p in parts:
-        p = p.strip()
+        p = p.strip(" .!؟?-•،")
         if len(p.split()) >= 4:
             out.append(p)
     return out
@@ -64,48 +66,69 @@ def _hostname(url: str) -> str:
     except Exception:
         return ""
 
+def _year_boost(s: str) -> float:
+    """دفعة للحداثة إن وُجدت سنة حديثة في الجملة."""
+    years = re.findall(r"\b(20[1-5]\d|19\d{2})\b", s)
+    if not years:
+        return 0.0
+    y = max(int(x) for x in years)
+    if y >= 2022:  # حداثة
+        return 0.4
+    if y >= 2018:
+        return 0.2
+    return 0.0
+
 # =========================== كشف نية السؤال ===========================
 def _detect_intent(q: str) -> str:
-    qn = _norm_ar(q.lower())
+    qn = _norm_ar((q or "").lower())
     if re.search(r"\b(من هو|من هي|من هما|من)\b", qn):
         return "person"
     if re.search(r"\b(ما هو|ماهي|ما هي|تعريف)\b", qn):
         return "definition"
-    if re.search(r"\b(كيف|طريقة|خطوات|حل|شرح)\b", qn):
+    if re.search(r"\b(كيف|طريقة|خطوات|حل|شرح|install|setup)\b", qn):
         return "howto"
     if re.search(r"\b(مقارن(ه|ة)|افضل|الافضل|vs|مقارنة)\b", qn):
         return "compare"
     if re.search(r"\b(متى|تاريخ|timeline|سنة|عام)\b", qn):
         return "timeline"
-    if re.search(r"\b(قائمة|list|انواع|تصنيفات)\b", qn):
+    if re.search(r"\b(قائمة|list|انواع|تصنيفات|types)\b", qn):
         return "list"
+    if re.search(r"\b(سعر|اسعار|price|cost)\b", qn):
+        return "price"
     return "general"
 
 # =========================== ترتيب/تلخيص ===========================
+TRUSTED_HOSTS = {
+    "wikipedia.org","who.int","un.org","bbc.com","nature.com","arxiv.org","docs.python.org",
+    "developer.android.com","microsoft.com","mozilla.org","numpy.org","pytorch.org","tensorflow.org",
+}
+
 def _score_sentence(sent: str, q: str, title_hint: Optional[str] = None, source_hint: Optional[str] = None) -> float:
     q_tokens = [w for w in re.split(r"[\W_]+", _norm_ar(q).lower()) if len(w) > 1]
     s_tokens = [w for w in re.split(r"[\W_]+", _norm_ar(sent).lower()) if len(w) > 1]
     if not s_tokens:
         return 0.0
+    # تشابه بسيط (BM25-lite): عدد التقاطعات + تطبيع بالطول
     overlap = sum(1 for w in q_tokens if w in s_tokens)
-    length_penalty = 1.0 if 6 <= len(s_tokens) <= 40 else 0.6
+    length_norm = 1.0 / (1.0 + math.fabs(len(s_tokens) - 18) / 18.0)  # الجمل المتوسطة أفضل
     title_boost = 0.0
     if title_hint:
         t_tokens = [w for w in re.split(r"[\W_]+", _norm_ar(title_hint).lower()) if len(w) > 1]
-        title_boost = 0.3 * sum(1 for w in q_tokens if w in t_tokens)
+        title_boost = 0.25 * sum(1 for w in q_tokens if w in t_tokens)
     source_boost = 0.0
     if source_hint:
-        # مواقع موثوقة تعطي دفعة بسيطة (قابلة للتوسّع)
-        trusted = {"wikipedia.org","who.int","un.org","bbc.com","nature.com","arxiv.org"}
         host = _hostname(source_hint)
-        if any(t in host for t in trusted):
+        if any(t in host for t in TRUSTED_HOSTS):
             source_boost = 0.5
-    return (overlap * length_penalty) + title_boost + source_boost
+    fresh = _year_boost(sent)
+    # مكافأة وجود نمط تاريخ/شهر
+    month_boost = 0.2 if re.search(MONTHS, sent, flags=re.I) else 0.0
+    return (overlap * 0.9 + title_boost + source_boost + fresh + month_boost) * length_norm
 
 def _fingerprint(s: str) -> str:
-    return hashlib.sha1(_norm_ar(re.sub(r"\W+", "", s.lower()))[:256].encode()).hexdigest()[:16]
+    return hashlib.sha1(_norm_ar(re.sub(r"\W+", "", (s or "").lower()))[:256].encode()).hexdigest()[:16]
 
-def _dedup_sentences(scored: List[Tuple[float, str]], max_sents: int) -> List[str]:
+def _dedup_sentences(scored: List[Tuple[float, str]], max_sents: int, host_hint: Optional[str] = None) -> List[str]:
     seen, out = set(), []
     for score, s in scored:
         fp = _fingerprint(s)
@@ -124,19 +147,73 @@ def _extractive_summary(snippets: List[str], q: str, titles: List[str], links: L
         link = links[i] if i < len(links) else ""
         for s in _sentences(t):
             sc = _score_sentence(s, q, title_hint=title, source_hint=link)
+            # استبعاد الجُمل الإعلانية الشائعة
+            if re.search(r"(اضغط هنا|اشترك|سجّل|قم بتنزيل|اعلان)", s, flags=re.I):
+                sc *= 0.5
             pool.append((sc, s))
     pool.sort(key=lambda x: x[0], reverse=True)
     return _dedup_sentences(pool, max_sents=max_sents)
 
+# =========================== انتزاع سريع (تعريف/خطوات) ===========================
+DEF_PATTS = [
+    r"^(?:ما هو|ماهي|ما هي)\s+(.+?)\s*[:\-—]\s*(.+)$",
+    r"^(.+?)\s+هو\s+(.+)$",
+]
+STEP_PATTS = [
+    r"^\d+\)\s+.+", r"^\d+\.\s+.+", r"^\-\s+.+", r"^•\s+.+"
+]
+
+def _try_quick_definition(snips: List[str]) -> Optional[str]:
+    for s in snips:
+        for line in _sentences(s):
+            for p in DEF_PATTS:
+                m = re.match(p, line, flags=re.I)
+                if m and len(line.split()) >= 6:
+                    return line
+    return None
+
+def _try_steps(snips: List[str], max_items: int = 6) -> List[str]:
+    steps: List[str] = []
+    for s in snips:
+        for line in s.splitlines():
+            line = _clean(line)
+            if any(re.match(p, line) for p in STEP_PATTS):
+                steps.append(re.sub(r"^[\d\.\)\-•]+\s*", "", line))
+                if len(steps) >= max_items:
+                    return steps
+    return steps
+
+# =========================== تنقية النتائج وتوحيد الحقول ===========================
+def _normalize_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """توحيد المفاتيح: title, link, snippet, source + إزالة المكررات بالعنوان/الرابط/النطاق"""
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for r in results or []:
+        title = _clean(r.get("title") or r.get("site") or "")
+        link = _clean(r.get("url") or r.get("link") or "")
+        snippet = _clean(r.get("snippet") or r.get("description") or r.get("text") or "")
+        source = r.get("source") or ""
+        host = _hostname(link)
+        key = (title[:80].lower(), link.lower()[:120], host)
+        if link and key not in seen:
+            seen.add(key)
+            out.append({"title": title, "link": link, "snippet": snippet, "source": source, "host": host})
+    return out
+
 # =========================== عرض المصادر ===========================
-def _render_sources(results: List[Dict]) -> str:
+def _render_sources(results: List[Dict[str, Any]]) -> str:
     items = []
+    used_hosts = set()
     for i, r in enumerate(results[:10], start=1):
-        title = _clean(r.get("title") or r.get("site") or "مصدر")
-        url = _clean(r.get("url") or r.get("link") or "")
+        title = _clean(r.get("title") or "مصدر")
+        url = _clean(r.get("link") or "")
         if not url:
             continue
         host = _hostname(url)
+        # لا نكرر نفس المضيف كثيرًا لتنوّع المصادر
+        if host in used_hosts and i > 4:
+            continue
+        used_hosts.add(host)
         items.append(f'<li><a href="{url}" target="_blank" rel="noopener">{i}. {title}</a> <small>({host})</small></li>')
     return "<ul class='sources-list'>" + "".join(items) + "</ul>" if items else "لا توجد مصادر متاحة."
 
@@ -154,7 +231,6 @@ def summarize_answer(
     :param memory_hits: نتائج ذاكرة داخلية (إن وجدت في تطبيقك) تُعرض كمرجع إضافي.
     يعيد HTML جاهز للعرض.
     """
-
     q = _clean(query)
 
     # حواجز السلامة
@@ -166,14 +242,15 @@ def summarize_answer(
     # نوايا السؤال
     intent = _detect_intent(q)
 
-    titles, links, snippets = [], [], []
-    for r in (results or []):
-        titles.append(_clean(r.get("title") or ""))
-        links.append(_clean(r.get("url") or r.get("link") or ""))
-        snip = _clean(r.get("snippet") or r.get("description") or r.get("text") or "")
-        if titles[-1] and titles[-1] not in snip:
-            snip = f"{titles[-1]}. {snip}" if snip else titles[-1]
-        snippets.append(snip)
+    # تنقية وتوحيد نتائج البحث
+    norm = _normalize_results(results)
+    titles  = [r["title"] for r in norm]
+    links   = [r["link"] for r in norm]
+    snippets= [r["snippet"] for r in norm]
+
+    # حاول انتزاع تعريف/خطوات مباشرة
+    quick_def = _try_quick_definition(snippets) if intent in {"definition","person","general"} else None
+    quick_steps = _try_steps(snippets) if intent in {"howto"} else []
 
     # إذا لا توجد مقتطفات، اعرض العناوين فقط
     if not any(snippets):
@@ -183,11 +260,13 @@ def summarize_answer(
             f"<div class='answer'>"
             f"<p>هذه أبرز النقاط حول سؤالك:</p>"
             f"<div class='bullets'>{bullets}</div>"
-            f"<h3>المصادر:</h3>{_render_sources(results)}"
+            f"<h3>المصادر:</h3>{_render_sources(norm)}"
             f"</div>"
         )
 
     picked = _extractive_summary(snippets, q, titles, links, max_sents=max_points)
+
+    # العنوان وفق النية
     header = {
         "person": "بطاقة تعريف",
         "definition": "تعريف مختصر",
@@ -195,20 +274,29 @@ def summarize_answer(
         "compare": "مقارنة سريعة",
         "timeline": "جدول زمني مختصر",
         "list": "قائمة/تصنيفات",
+        "price": "نقاط تتعلق بالأسعار",
         "general": "الخلاصة",
     }.get(intent, "الخلاصة")
 
-    # إبراز بسيط للأسماء/التواريخ عند نمط الشخص/الزمن
-    if intent in {"person", "timeline"}:
+    # إبراز بسيط للأسماء/التواريخ في بعض النوايا
+    if intent in {"person", "timeline", "price"}:
         highlighted = []
         for s in picked:
             s2 = re.sub(r"(\b\d{4}\b)", r"<mark>\1</mark>", s)  # سنة
-            s2 = re.sub(r"(\b\d{1,2}\s*(يناير|فبراير|مارس|ابريل|أبريل|مايو|يونيو|يوليو|اغسطس|أغسطس|سبتمبر|اكتوبر|أكتوبر|نوفمبر|ديسمبر)\b)", r"<mark>\1</mark>", s2, flags=re.I)
+            s2 = re.sub(rf"(\b\d{{1,2}}\s*{MONTHS}\b)", r"<mark>\1</mark>", s2, flags=re.I)
+            s2 = re.sub(r"(\b\d+(\.\d+)?\s*(\$|USD|ريال|درهم|دولار|SAR|AED))", r"<mark>\1</mark>", s2)
             highlighted.append(s2)
         picked = highlighted
 
-    bullets_html = "\n".join([f"• {s}" for s in picked]) if picked else "لم أجد ما يكفي لتوليد خلاصة."
-    sources_html = _render_sources(results)
+    # دمج تعريف سريع/خطوات إن توفرت
+    preface_lines: List[str] = []
+    if quick_def:
+        preface_lines.append(quick_def)
+    if quick_steps:
+        preface_lines.extend([f"الخطوة: {s}" for s in quick_steps])
+
+    bullets_html = "\n".join([f"• {s}" for s in (preface_lines + picked)]) if (preface_lines or picked) else "لم أجد ما يكفي لتوليد خلاصة."
+    sources_html = _render_sources(norm)
 
     # ذاكرة داخلية (اختياري)
     memory_html = ""
@@ -257,24 +345,18 @@ def summarize_as_json(
     """
     بديل يرجّع JSON منسّق: {html, bullets, sources}
     """
-    # نعيد HTML كامل + قائمة نقاط + المصادر بشكل منظم
     html_block = summarize_answer(query, results, memory_hits=memory_hits, max_points=max_points)
 
-    titles, links = [], []
-    for r in (results or [])[:10]:
-        titles.append(_clean(r.get("title") or r.get("site") or "مصدر"))
-        links.append(_clean(r.get("url") or r.get("link") or ""))
-
-    # استخراج النقاط من HTML (بسيط)
-    bullets = []
+    # استخراج النقاط من HTML بطريقة بسيطة
+    bullets: List[str] = []
     for line in html_block.splitlines():
-        if line.strip().startswith("•"):
-            bullets.append(_clean(line.replace("•", "", 1)))
+        t = line.strip()
+        if t.startswith("•"):
+            bullets.append(_clean(t.replace("•", "", 1)))
 
-    src_struct = []
-    for t, u in zip(titles, links):
-        if u:
-            src_struct.append({"title": t, "url": u, "host": _hostname(u)})
+    # مصادر منظمة
+    norm = _normalize_results(results)
+    src_struct = [{"title": r["title"] or "مصدر", "url": r["link"], "host": r["host"]} for r in norm if r["link"]]
 
     return {
         "ok": True,
