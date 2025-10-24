@@ -18,8 +18,7 @@ async def google_cse(query: str, max_results: int, google_api_key: str, google_c
     url = "https://www.googleapis.com/customsearch/v1"
     params = {"key": google_api_key, "cx": google_cse_id, "q": query, "num": min(max_results,10), "hl":"ar","lr":"lang_ar"}
     async with httpx.AsyncClient(timeout=20, headers={"User-Agent": UA}) as ax:
-        r = await ax.get(url, params=params)
-        r.raise_for_status()
+        r = await ax.get(url, params=params); r.raise_for_status()
         data = r.json()
     out = []
     for it in (data.get("items") or [])[:max_results]:
@@ -34,8 +33,7 @@ async def google_serper(query: str, max_results: int, serper_api_key: str) -> Li
     headers = {"X-API-KEY": serper_api_key, "Content-Type": "application/json"}
     payload = {"q": query, "num": max_results, "hl": "ar"}
     async with httpx.AsyncClient(timeout=20, headers=headers) as ax:
-        r = await ax.post(url, json=payload)
-        r.raise_for_status()
+        r = await ax.post(url, json=payload); r.raise_for_status()
         data = r.json()
     out = []
     for it in (data.get("organic") or [])[:max_results]:
@@ -48,21 +46,17 @@ async def google_scrape(query: str, max_results: int = 5) -> List[Dict]:
     results: List[Dict] = []
     try:
         async with httpx.AsyncClient(headers={"User-Agent": UA}, timeout=20, follow_redirects=True) as ax:
-            resp = await ax.get(url)
-            resp.raise_for_status()
+            resp = await ax.get(url); resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             for g in soup.select("div.g"):
-                h3 = g.find("h3")
-                if not h3: continue
-                a = g.find("a", href=True)
-                if not a: continue
-                link = a["href"]
+                h3 = g.find("h3");  a = g.find("a", href=True)
+                if not (h3 and a): continue
+                link = a["href"];  
                 if not link.startswith("http"): continue
-                snippet = ""
+                sn = ""
                 sn_el = g.select_one("div.VwiC3b, span.aCOpRe")
-                if sn_el:
-                    snippet = sn_el.get_text(" ", strip=True)
-                results.append({"title": h3.get_text(strip=True), "link": link, "snippet": snippet, "source": "Google"})
+                if sn_el: sn = sn_el.get_text(" ", strip=True)
+                results.append({"title": h3.get_text(strip=True), "link": link, "snippet": sn, "source": "Google"})
                 if len(results) >= max_results: break
     except Exception as e:
         print("Google scrape error:", e)
@@ -81,69 +75,50 @@ def duckduckgo(query: str, max_results: int = 5) -> List[Dict]:
                         if len(out) >= max_results: break
                     break
                 except Exception as e:
-                    print("DuckDuckGo error:", e)
-                    time.sleep(3)
+                    print("DuckDuckGo error:", e); time.sleep(3)
     except Exception as e:
         print("DuckDuckGo init error:", e)
     return out
 
 # ---------- بحث موحّد ----------
-async def smart_search(
-    query: str,
-    max_results: int = 8,
-    *,
-    google_api_key: str = "",
-    google_cse_id: str = "",
-    serper_api_key: str = "",
-) -> Dict:
+async def smart_search(query: str, max_results: int = 8, *, google_api_key: str = "", google_cse_id: str = "", serper_api_key: str = "") -> Dict:
     query = (query or "").strip()
     try:
         used, results = None, []
 
         if google_api_key and google_cse_id:
             try:
-                results = await google_cse(query, max_results, google_api_key, google_cse_id)
-                used = "Google CSE"
-            except Exception as e:
-                print("Google CSE error:", e)
+                results = await google_cse(query, max_results, google_api_key, google_cse_id); used = "Google CSE"
+            except Exception as e: print("Google CSE error:", e)
 
         if not results and serper_api_key:
             try:
-                results = await google_serper(query, max_results, serper_api_key)
-                used = "Serper"
-            except Exception as e:
-                print("Serper error:", e)
+                results = await google_serper(query, max_results, serper_api_key); used = "Serper"
+            except Exception as e: print("Serper error:", e)
 
         if not results:
-            results = await google_scrape(query, max_results=max_results)
-            used = "Google" if results else used
+            results = await google_scrape(query, max_results=max_results);  used = "Google" if results else used
 
         if not results:
-            results = duckduckgo(query, max_results=max_results)
-            used = "DuckDuckGo" if results else used
+            results = duckduckgo(query, max_results=max_results);         used = "DuckDuckGo" if results else used
 
         return {"ok": True, "used": used or "NoEngine", "results": results}
     except Exception as e:
         return {"ok": False, "used": None, "results": [], "error": str(e)}
 
-# ---------- جلب نصوص الصفحات (اختياري للتلخيص) ----------
+# ---------- جلب نصوص الصفحات (يعزّز التلخيص) ----------
 async def deep_fetch_texts(results: List[Dict], max_pages: int = 5) -> List[str]:
     texts: List[str] = []
     headers = {"User-Agent": UA}
     async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as ax:
         for r in (results or [])[:max_pages]:
-            url = r.get("link")
-            if not url: continue
+            url = r.get("link");  if not url: continue
             try:
                 resp = await ax.get(url)
-                if resp.status_code >= 400:
-                    continue
-                doc = Document(resp.text)
-                html = doc.summary()
+                if resp.status_code >= 400: continue
+                doc = Document(resp.text);  html = doc.summary()
                 text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
                 text = re.sub(r"\s+", " ", text)
-                if len(text) > 80:
-                    texts.append(text[:5000])
-            except Exception:
-                continue
+                if len(text) > 80: texts.append(text[:5000])
+            except Exception: continue
     return texts
