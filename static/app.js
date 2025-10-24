@@ -1,5 +1,5 @@
 // ==========================
-// Bassam Brain – app.js (Merged Final)
+// Bassam Brain – app.js (Final)
 // ==========================
 
 // ====== تسجيل Service Worker لتفعيل PWA ======
@@ -54,74 +54,8 @@ if (installBtn) {
   })();
 }
 
-// ==========================
-// واجهة المحادثة: عرض السؤال + الإجابة
-// ==========================
-
-// أمان بسيط ضد إدخال HTML
-function escapeHTML(s) {
-  return String(s || "").replace(/[&<>"']/g, m => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-  }[m]));
-}
-
-function pushCard(role, html) {
-  const conv = document.getElementById("conversation");
-  if (!conv) return; // إن لم توجد الحاوية نتجاهل بدون كسر الواجهة
-
-  const box = document.createElement("div");
-  box.style.padding = "14px";
-  box.style.borderRadius = "14px";
-  box.style.background = role === "user" ? "#1d2a44" : "#162237";
-  box.style.border = "1px solid #273654";
-  box.style.lineHeight = "1.9";
-  box.style.direction = "rtl";
-  box.innerHTML = html;
-  conv.prepend(box); // أحدث سؤال/جواب بالأعلى
-}
-
-// استدعِ هذه لإرسال السؤال وعرض البطاقات
-async function askQuestion(q, askBtn) {
-  if (!q || !q.trim()) return;
-
-  // اعرض السؤال فورًا
-  pushCard("user", `<b>سؤالك:</b><br>${escapeHTML(q)}`);
-
-  // تعطيل الزر مؤقتًا إن وُجد
-  const btnRef = askBtn || document.getElementById("askBtn");
-  if (btnRef) { btnRef.disabled = true; btnRef.textContent = "⏳ جاري البحث..."; }
-
-  try {
-    const r = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q })
-    });
-
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-
-    // دعم {question, answer, links} أو {answer, links} فقط
-    const links = (data.links || []).map(u =>
-      `<li><a href="${u}" target="_blank" rel="noopener">${escapeHTML(u)}</a></li>`
-    ).join("");
-    const linksBlock = links ? `<hr><b>روابط للاستزادة:</b><ul style="margin:6px 0 0 18px">${links}</ul>` : "";
-
-    // عرض الإجابة
-    pushCard("bot", `<b>الإجابة:</b><br>${(data.answer || "")}${linksBlock}`);
-  } catch (e) {
-    console.error(e);
-    pushCard("bot", `❗ حدث خطأ أثناء جلب الإجابة. حاول لاحقًا.`);
-  } finally {
-    if (btnRef) { btnRef.disabled = false; btnRef.textContent = "اسأل"; }
-  }
-}
-
-// ==========================
-// تفعيل أزرار "عرض المزيد/إخفاء" + إدارة النماذج
-// ==========================
+// ====== تفعيل أزرار "عرض المزيد/إخفاء" للملخّص والنتائج ======
 document.addEventListener("DOMContentLoaded", () => {
-  // ====== تفعيل أزرار "عرض المزيد/إخفاء" للملخّص والنتائج ======
   function setupToggle(btnId, boxId) {
     const btn = document.getElementById(btnId);
     const box = document.getElementById(boxId);
@@ -142,30 +76,22 @@ document.addEventListener("DOMContentLoaded", () => {
     setLabel();
   }
 
-  // يطابق IDs الموجودة في index.html (اختياري)
+  // يطابق IDs الموجودة في index.html
   setupToggle("toggleSummary", "summaryBox");
   setupToggle("toggleResults", "resultsBox");
 
-  // ====== إدارة نموذج السؤال (submit) ======
+  // ====== UX: تعطيل أزرار الإرسال أثناء التنفيذ ======
   const searchForm = document.getElementById("searchForm");
   if (searchForm) {
     const askBtn = document.getElementById("askBtn");
-    searchForm.addEventListener("submit", (ev) => {
-      ev.preventDefault();
-
-      // ابحث عن حقل الإدخال داخل الفورم (مرن مع عدة أسماء)
-      const input = searchForm.querySelector("textarea, input[type='text'], input[type='search']");
-      const q = input ? input.value : "";
-
-      // احفظ آخر قيمة (اختياري)
-      try { localStorage.setItem("last_q", q); } catch (_) {}
-
-      // نفّذ الطلب واعرض الكروت
-      askQuestion(q, askBtn);
+    searchForm.addEventListener("submit", () => {
+      if (askBtn) {
+        askBtn.disabled = true;
+        askBtn.textContent = "⏳ جاري البحث...";
+      }
     });
   }
 
-  // ====== UX: تعطيل زر رفع الملفات أثناء التنفيذ ======
   const uploadForm = document.getElementById("uploadForm");
   if (uploadForm) {
     const uploadBtn = uploadForm.querySelector("button[type='submit']");
