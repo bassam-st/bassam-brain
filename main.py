@@ -1,6 +1,6 @@
-# main.py — Bassam Brain (FastAPI)
+# main.py — Bassam Brain (FastAPI) — نسخة محسّنة لRender
 # بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
-# لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر
+# لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر + تحسينات أمن/تشغيل
 
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 import datetime as dt
@@ -14,6 +14,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 
 import httpx
 from duckduckgo_search import DDGS
@@ -39,6 +40,15 @@ DB_PATH = os.path.join(DATA_DIR, "bassam.db")
 
 # ----------------------------- تطبيق
 app = FastAPI(title="Bassam Brain")
+# CORS (إن أردت تقييده ضع نطاقك بدل "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -46,16 +56,23 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # ----------------------------- مفاتيح/إعدادات عامة
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
+
+# 🔐 إلزام توفير كلمة مرور وسر الإدارة من البيئة
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
+if not ADMIN_PASSWORD or not ADMIN_SECRET:
+    raise RuntimeError("Missing ADMIN_PASSWORD or ADMIN_SECRET environment variables.")
+
+# ضبط أمان الكوكي
+FORCE_SECURE_COOKIES = os.getenv("FORCE_SECURE_COOKIES", "1").strip()  # اجعلها "0" في التطوير المحلي دون https
 
 # OpenAI (احتياطي)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ----------------------------- الربط مع النموذج المحلي (llama-server / vLLM المتوافق)
-# ملاحظة: على Render لابد يكون LOCAL_LLM_BASE عنوانًا عامًا https (مثلاً من Cloudflared/Tailscale/VPS)
+# ملاحظة: على Render لابد يكون LOCAL_LLM_BASE عنوانًا عامًا https (مثلاً Cloudflared/Tailscale/VPS)
 LOCAL_LLM_BASE = os.getenv("LOCAL_LLM_BASE", "").rstrip("/")   # مثال: https://your-tunnel-url.trycloudflare.com
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "local").strip()
 USE_LOCAL_FIRST = os.getenv("USE_LOCAL_FIRST", "1").strip()  # "1" جرّب المحلي أولًا، "0" العكس
@@ -65,8 +82,8 @@ async def ask_local_llm(user_q: str, context_lines: List[str], temperature: floa
     إرسال سؤال إلى خادم LLaMA/vLLM المتوافق مع /v1/chat/completions
     يرجع dict: {"ok": True/False, "answer": "...", "engine_used": "Local", "error": "..."}
     """
-    if not LOCAL_LLM_BASE:
-        return {"ok": False, "error": "LOCAL_LLM_BASE not configured"}
+    if not LOCAL_LLM_BASE or not LOCAL_LLM_BASE.startswith("http"):
+        return {"ok": False, "error": "LOCAL_LLM_BASE must be an http(s) url and not empty"}
     try:
         system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
                       "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
@@ -99,7 +116,9 @@ async def ask_local_llm(user_q: str, context_lines: List[str], temperature: floa
 # ----------------------------- OneSignal + الدوريات + التوقيت
 ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
 ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
-TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()
+
+# 🕓 المنطقة الزمنية الافتراضية اليمن
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Aden").strip()
 TZ = ZoneInfo(TIMEZONE)
 
 LEAGUE_IDS = [x.strip() for x in os.getenv(
@@ -332,6 +351,13 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
+# ============================== أدوات مساعدة للروابط المطلقة
+def absolute_url(url_path: str, request: Optional[Request] = None) -> str:
+    if url_path.startswith("http"):
+        return url_path
+    base = (PUBLIC_BASE_URL or (str(request.base_url).rstrip("/") if request else "")).rstrip("/")
+    return f"{base}{url_path}"
+
 # ============================== API: ردّ الذكاء (محلي أولاً ثم OpenAI كاحتياط)
 @app.post("/api/ask")
 async def api_ask(request: Request):
@@ -383,7 +409,7 @@ async def api_ask(request: Request):
         ua = request.headers.get("user-agent", "?")
 
         # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
-        local_first = (USE_LOCAL_FIRST == "1") or (not client)
+        local_first = (USE_LOCAL_FIRST == "1") or (not openai_client)
         if local_first:
             local = await ask_local_llm(q, context_lines)
             if local.get("ok"):
@@ -393,7 +419,7 @@ async def api_ask(request: Request):
                 return JSONResponse({"ok": True, "engine_used": "Local",
                                      "answer": answer, "bullets": bullets, "sources": sources})
             # لو فشل المحلي ولم يوجد OpenAI -> نرجّع ملخص البحث
-            if not client:
+            if not openai_client:
                 return JSONResponse({
                     "ok": True, "engine_used": search.get("used"),
                     "answer": "⚠️ تعذر الاتصال بالنموذج المحلي، أعرض لك ملخصًا من النتائج.",
@@ -401,12 +427,12 @@ async def api_ask(request: Request):
                 })
 
         # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
-        if client:
+        if openai_client:
             system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
                           "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
             user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
 
-            resp = client.chat.completions.create(
+            resp = openai_client.chat.completions.create(
                 model=LLM_MODEL or "gpt-5-mini",
                 messages=[{"role": "system", "content": system_msg},
                           {"role": "user", "content": user_msg}],
@@ -486,7 +512,10 @@ def admin_home(request: Request, login: Optional[int] = None):
 def admin_login(request: Request, password: str = Form(...)):
     if make_token(password) == ADMIN_TOKEN:
         resp = RedirectResponse(url="/admin", status_code=302)
-        resp.set_cookie("bb_admin", ADMIN_TOKEN, httponly=True, samesite="lax")
+        resp.set_cookie(
+            "bb_admin", ADMIN_TOKEN, httponly=True, samesite="lax",
+            secure=(FORCE_SECURE_COOKIES == "1")
+        )
         return resp
     return templates.TemplateResponse("admin.html", {"request": request, "page": "login", "error": "❌ كلمة المرور غير صحيحة", "login": True})
 
@@ -519,7 +548,7 @@ def admin_export(request: Request):
 def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي", body: str = "مرحبًا! هذا إشعار من بسام الذكي"):
     if not is_admin(request):
         return RedirectResponse(url="/admin?login=1", status_code=302)
-    ok = send_push(title, body, "/")
+    ok = send_push(title, body, "/", request=request)
     return JSONResponse({"ok": ok})
 
 @app.get("/admin/push-match")
@@ -536,10 +565,10 @@ def admin_push_match(request: Request,
         title = f"🎬 بدأت الآن: {home} × {away}"
         body = "انطلقت المباراة!"
     deeplink_path = f"/deeplink?match={quote(f'{home} vs {away}')}"
-    ok = send_push(title, body, deeplink_path)
+    ok = send_push(title, body, deeplink_path, request=request)
     return JSONResponse({"ok": ok})
 
-# ============================== مباريات اليوم + إشعارات OneSignal (بتوقيت مكة)
+# ============================== مباريات اليوم + إشعارات OneSignal (بتوقيت المنطقة المحددة)
 def _to_local(date_str: str, time_str: str) -> dt.datetime:
     t = (time_str or "00:00:00").split("+")[0]
     naive = dt.datetime.fromisoformat(f"{date_str}T{t}")
@@ -577,10 +606,10 @@ def fetch_today_matches() -> List[Dict]:
     matches.sort(key=lambda x: x["kickoff"])
     return matches
 
-def send_push(title: str, body: str, url_path: str = "/") -> bool:
+def send_push(title: str, body: str, url_path: str = "/", request: Optional[Request] = None) -> bool:
     if not (ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY):
         return False
-    full_url = url_path if url_path.startswith("http") else (PUBLIC_BASE_URL.rstrip("/") + url_path)
+    full_url = absolute_url(url_path, request)
     payload = {
         "app_id": ONESIGNAL_APP_ID,
         "included_segments": ["Subscribed Users"],
@@ -598,7 +627,7 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
         return False
 
 def job_daily_digest_15():
-    """ملخص مباريات اليوم — الساعة 15:00 بتوقيت مكة"""
+    """ملخص مباريات اليوم — الساعة 15:00 حسب TIMEZONE"""
     matches = fetch_today_matches()
     if not matches:
         return
@@ -608,7 +637,7 @@ def job_daily_digest_15():
     send_push(title, body, "/")
 
 def job_half_hour_and_kickoff():
-    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية (بتوقيت مكة)"""
+    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية"""
     matches = fetch_today_matches()
     if not matches:
         return
@@ -622,15 +651,19 @@ def job_half_hour_and_kickoff():
             send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}",
                       f"البطولة: {m['league']}", m["click_url"])
 
+# ⚙️ تحكم في تشغيل المجدول على Render (لتجنّب الازدواجية)
+RUN_SCHEDULER = os.getenv("RUN_SCHEDULER", "1").strip()  # عيّنها "0" على الخدمات الثانوية
+
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))   # ⏰ 15:00 يوميًا مكة
+    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))   # ⏰ 15:00 يوميًا
     sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))  # ⏱️ كل 5 دقائق
     sch.start()
 
 @app.on_event("startup")
 def _on_startup():
     try:
-        start_scheduler()
+        if RUN_SCHEDULER == "1":
+            start_scheduler()
     except Exception:
         traceback.print_exc()
