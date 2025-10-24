@@ -1,73 +1,105 @@
-# core/search.py
-# Bassam الذكي — بحث عميق (Google أولاً ثم DuckDuckGo)
-
-import httpx
+# core/search.py — Bassam الذكي — Google CSE → Google Scrape → DuckDuckGo
+import httpx, re
 from bs4 import BeautifulSoup
 from readability import Document
 from duckduckgo_search import DDGS
+from typing import List, Dict, Optional
 
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+      "AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/123.0.0.0 Safari/537.36")
 
-def google_search(query, max_results=5):
-    """
-    البحث الأساسي من Google
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
-        )
-    }
-    url = f"https://www.google.com/search?q={query}&num={max_results}"
+# ---------- Google CSE (مُستَحسَن) ----------
+async def google_cse(query: str, max_results: int, google_api_key: str, google_cse_id: str) -> List[Dict]:
+    if not (google_api_key and google_cse_id):
+        raise RuntimeError("Google CSE not configured")
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {"key": google_api_key, "cx": google_cse_id, "q": query, "num": min(max_results,10), "hl":"ar","lr":"lang_ar"}
+    async with httpx.AsyncClient(timeout=20, headers={"User-Agent": UA}) as ax:
+        r = await ax.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+    out = []
+    for it in (data.get("items") or [])[:max_results]:
+        out.append({"title": it.get("title"), "link": it.get("link"), "snippet": it.get("snippet"), "source": "Google CSE"})
+    return out
 
-    results = []
+# ---------- Google Scrape (احتياطي) ----------
+async def google_scrape(query: str, max_results: int = 5) -> List[Dict]:
+    url = f"https://www.google.com/search?q={query}&num={max_results}&hl=ar"
+    results: List[Dict] = []
     try:
-        with httpx.Client(headers=headers, timeout=10.0, follow_redirects=True) as client:
-            response = client.get(url)
-            response.raise_for_status()
-
-            soup = BeautifulSoup(response.text, "html.parser")
-
+        async with httpx.AsyncClient(headers={"User-Agent": UA}, timeout=20, follow_redirects=True) as ax:
+            resp = await ax.get(url)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
             for g in soup.select("div.g"):
-                title_el = g.find("h3")
-                if not title_el:
-                    continue
-                title = title_el.get_text(strip=True)
-                link_tag = g.find("a", href=True)
-                link = link_tag["href"] if link_tag else ""
-                if link.startswith("http"):
-                    results.append({"title": title, "link": link})
-
+                h3 = g.find("h3")
+                if not h3: continue
+                a = g.find("a", href=True)
+                if not a: continue
+                link = a["href"]
+                if not link.startswith("http"): continue
+                snippet = ""
+                sn_el = g.select_one("div.VwiC3b, span.aCOpRe")
+                if sn_el:
+                    snippet = sn_el.get_text(" ", strip=True)
+                results.append({"title": h3.get_text(strip=True), "link": link, "snippet": snippet, "source": "Google"})
+                if len(results) >= max_results: break
     except Exception as e:
-        print("Google search error:", e)
-
+        print("Google scrape error:", e)
     return results
 
-
-def duckduckgo_search_fallback(query, max_results=5):
-    """
-    البحث الاحتياطي من DuckDuckGo
-    """
-    results = []
+# ---------- DuckDuckGo ----------
+def duckduckgo(query: str, max_results: int = 5) -> List[Dict]:
+    out = []
     try:
         with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
-                results.append({"title": r["title"], "link": r["href"]})
+            for r in ddgs.text(query, region="xa-ar", safesearch="moderate", max_results=max_results):
+                out.append({"title": r.get("title"), "link": r.get("href") or r.get("url"), "snippet": r.get("body"), "source": "DuckDuckGo"})
+                if len(out) >= max_results: break
     except Exception as e:
-        print("DuckDuckGo search error:", e)
-    return results
+        print("DuckDuckGo error:", e)
+    return out
 
+# ---------- بحث موحد ----------
+async def smart_search(query: str, max_results: int = 8, *, google_api_key: str = "", google_cse_id: str = "") -> Dict:
+    query = (query or "").strip()
+    try:
+        used, results = None, []
+        if google_api_key and google_cse_id:
+            try:
+                results = await google_cse(query, max_results, google_api_key, google_cse_id)
+                used = "Google CSE"
+            except Exception:
+                results = []
+        if not results:
+            results = await google_scrape(query, max_results=max_results)
+            used = "Google" if results else None
+        if not results:
+            results = duckduckgo(query, max_results=max_results)
+            used = "DuckDuckGo"
+        return {"ok": True, "used": used or "DuckDuckGo", "results": results}
+    except Exception as e:
+        return {"ok": False, "used": None, "results": [], "error": str(e)}
 
-def deep_search(query):
-    """
-    بحث عميق يبدأ من Google ثم ينتقل إلى DuckDuckGo عند الحاجة
-    """
-    print(f"🔍 بدء البحث عن: {query}")
-
-    results = google_search(query)
-    if not results:
-        print("⚠️ لم يتم العثور على نتائج من Google — الانتقال إلى DuckDuckGo...")
-        results = duckduckgo_search_fallback(query)
-
-    print(f"✅ عدد النتائج التي تم إيجادها: {len(results)}")
-    return results
+# ---------- جلب نصوص الصفحات (تعزيز للتلخيص) ----------
+async def deep_fetch_texts(results: List[Dict], max_pages: int = 5) -> List[str]:
+    texts: List[str] = []
+    headers = {"User-Agent": UA}
+    async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as ax:
+        for r in (results or [])[:max_pages]:
+            url = r.get("link")
+            if not url: continue
+            try:
+                resp = await ax.get(url)
+                doc = Document(resp.text)
+                html = doc.summary()
+                text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+                # تنظيف بسيط
+                text = re.sub(r"\s+", " ", text)
+                if len(text) > 80:
+                    texts.append(text[:5000])  # قصّ لحجم معقول
+            except Exception:
+                continue
+    return texts
