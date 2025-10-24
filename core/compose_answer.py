@@ -31,6 +31,15 @@ def compose_answer_ar(question: str, results: List[Dict]) -> Dict:
         return {"answer": "لم أستطع استخراج نقاط مفيدة من الويب.", "links": links[:5]}
 
     answer = f"سؤالك: {question}\n\nإليك ملخصًا ذكيًا من الويب:\n" + "\n".join([f"• {x}" for x in clean])
+
+    # ====== 💾 التعلم الذاتي للنواة بعد كل إجابة ======
+    from brain.learn_brain import learn_from_interaction
+    try:
+        _ = learn_from_interaction(question, results, answer)
+    except Exception:
+        pass  # لا تكسر الرد لو حدث خطأ أثناء الحفظ
+
     if links:
         answer += "\n\n📎 روابط للاستزادة:\n" + "\n".join([f"- {u}" for u in links[:5]])
+
     return {"answer": answer, "links": links[:5]}
