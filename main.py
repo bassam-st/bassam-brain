@@ -14,6 +14,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel  # ⭐ جديد
 
 import httpx
 from duckduckgo_search import DDGS
@@ -25,6 +26,9 @@ from zoneinfo import ZoneInfo
 
 # OpenAI (اختياري)
 from openai import OpenAI
+
+# ⭐ جديد: تركيب الإجابة النهائية من نتائج البحث
+from core.compose_answer import compose_answer_ar
 
 # ----------------------------- مسارات
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -331,6 +335,35 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
+
+# ============================== API: /api/chat لواجهة المحادثة (السؤال فوق الإجابة)
+class ChatIn(BaseModel):
+    q: str
+
+@app.post("/api/chat")
+async def api_chat(inp: ChatIn, request: Request):
+    """
+    يُستخدم من الواجهة الأمامية (JS) لعرض السؤال ثم جلب الإجابة
+    عبر البحث الذكي + تركيب الإجابة compose_answer_ar.
+    يُرجع: {"answer": "...", "links": [...]}
+    """
+    q = (inp.q or "").strip()
+    if not q:
+        return JSONResponse({"answer": "اكتب سؤالًا أولًا.", "links": []})
+
+    # بحث سريع
+    result = await smart_search(q, num=8)
+    results = result.get("results", [])
+
+    # تركيب الإجابة
+    payload = compose_answer_ar(q, results)  # يحتوي "answer" و"links"
+
+    # تسجيل
+    ip = request.client.host if request.client else "?"
+    ua = request.headers.get("user-agent", "?")
+    log_event("ask", ip, ua, query=q, engine_used=result.get("used"))
+
+    return JSONResponse(payload)
 
 # ============================== API: ردّ الذكاء (محلي أولاً ثم OpenAI كاحتياط)
 @app.post("/api/ask")
