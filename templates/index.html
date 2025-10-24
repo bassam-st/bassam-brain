@@ -40,12 +40,19 @@
     </div>
   </section>
 
+  <!-- نموذج السؤال -->
   <section class="card">
     <form id="searchForm" action="/search" method="post" class="row">
       <input id="q" type="text" name="q" placeholder="اكتب سؤالك هنا..." required/>
       <button type="submit" id="askBtn">اسأل</button>
     </form>
     {% if error %}<p class="err">⚠️ {{ error }}</p>{% endif %}
+  </section>
+
+  <!-- ✅ قسم المحادثة: سيعرض السؤال ثم الإجابة (أحدث في الأعلى) -->
+  <section class="card">
+    <h3>المحادثة</h3>
+    <div id="conversation" style="display:flex;flex-direction:column;gap:12px"></div>
   </section>
 
   {% if bullets %}
@@ -131,7 +138,6 @@
       const btn = document.getElementById("enablePush");
       const hint = document.getElementById("pushHint");
 
-      // دالة لتحديث الزر
       async function refreshState() {
         try {
           const perm = await OneSignal.Notifications.getPermissionState(); // granted | denied | default
@@ -161,7 +167,6 @@
         }
       }
 
-      // عند الضغط على الزر
       btn.addEventListener("click", async () => {
         try {
           await OneSignal.Notifications.requestPermission();
@@ -172,11 +177,9 @@
         await refreshState();
       });
 
-      // مراقبة أي تغييرات
       OneSignal.Notifications.addEventListener("permissionChange", refreshState);
       OneSignal.User.PushSubscription.addEventListener("change", refreshState);
 
-      // فحص الحالة أول مرة
       await refreshState();
     });
   </script>
