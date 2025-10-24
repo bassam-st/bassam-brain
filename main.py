@@ -1,6 +1,5 @@
-# main.py — Bassam Brain (FastAPI)
-# بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
-# لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر
+# main.py — Bassam Brain (FastAPI) — بدون OpenAI
+# بحث Google CSE أولًا ثم Google Scrape ثم DuckDuckGo + تلخيص/عرض + إشعارات + Deeplink + إدارة
 
 import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 import datetime as dt
@@ -16,15 +15,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import httpx
-from duckduckgo_search import DDGS
-
-# جدولة
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
-# OpenAI (اختياري)
-from openai import OpenAI
+# ========== استيراد النواة والبحث/التلخيص ==========
+from brain.omni_brain import summarize_answer
+from core.search import smart_search, deep_fetch_texts  # Google CSE → Google → DDG
+from core.summarize import smart_summarize
 
 # ----------------------------- مسارات
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,74 +42,20 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 # ----------------------------- مفاتيح/إعدادات عامة
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") if os.getenv("PUBLIC_BASE_URL") else ""
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "093589")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "bassam-secret")
 
-# OpenAI (احتياطي)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# بحث Google CSE (اختياري لكنه مفضّل)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+GOOGLE_CSE_ID  = os.getenv("GOOGLE_CSE_ID", "").strip()
 
-# ----------------------------- الربط مع النموذج المحلي (llama-server / vLLM المتوافق)
-# ملاحظة: على Render لابد يكون LOCAL_LLM_BASE عنوانًا عامًا https (مثلاً من Cloudflared/Tailscale/VPS)
-LOCAL_LLM_BASE = os.getenv("LOCAL_LLM_BASE", "").rstrip("/")   # مثال: https://your-tunnel-url.trycloudflare.com
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "local").strip()
-USE_LOCAL_FIRST = os.getenv("USE_LOCAL_FIRST", "1").strip()  # "1" جرّب المحلي أولًا، "0" العكس
-
-async def ask_local_llm(user_q: str, context_lines: List[str], temperature: float = 0.3, max_tokens: int = 600) -> Dict:
-    """
-    إرسال سؤال إلى خادم LLaMA/vLLM المتوافق مع /v1/chat/completions
-    يرجع dict: {"ok": True/False, "answer": "...", "engine_used": "Local", "error": "..."}
-    """
-    if not LOCAL_LLM_BASE:
-        return {"ok": False, "error": "LOCAL_LLM_BASE not configured"}
-    try:
-        system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-                      "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. "
-                      "إن لم تكن واثقًا قل لا أعلم.")
-        user_msg = f"السؤال:\n{user_q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
-
-        payload = {
-            "model": LOCAL_LLM_MODEL or "local",
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-        }
-
-        async with httpx.AsyncClient(timeout=120) as ax:
-            r = await ax.post(f"{LOCAL_LLM_BASE}/v1/chat/completions",
-                              headers={"Content-Type": "application/json"},
-                              json=payload)
-        if r.status_code != 200:
-            return {"ok": False, "error": f"{r.status_code}: {r.text}"}
-
-        data = r.json()
-        answer = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
-        return {"ok": True, "answer": answer.strip(), "engine_used": "Local"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-# ----------------------------- OneSignal + الدوريات + التوقيت
+# OneSignal + الدوريات + التوقيت
 ONESIGNAL_APP_ID = os.getenv("ONESIGNAL_APP_ID", "").strip()
 ONESIGNAL_REST_API_KEY = os.getenv("ONESIGNAL_REST_API_KEY", "").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Riyadh").strip()
 TZ = ZoneInfo(TIMEZONE)
 
-LEAGUE_IDS = [x.strip() for x in os.getenv(
-    "LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790"
-).split(",") if x.strip()]
-
-YACINE_PACKAGE = os.getenv("YACINE_PACKAGE", "com.yacine.app").strip()
-GENERAL_PACKAGE = os.getenv("GENERAL_PACKAGE", "com.general.live").strip()
-YACINE_SCHEME = os.getenv("YACINE_SCHEME", "yacine").strip()
-GENERAL_SCHEME = os.getenv("GENERAL_SCHEME", "general").strip()
-
-# أسماء الدوريات حسب TheSportsDB
 LEAGUE_NAME_BY_ID = {
     "4328": "English Premier League",
     "4335": "Spanish La Liga",
@@ -121,6 +65,15 @@ LEAGUE_NAME_BY_ID = {
     "4480": "Saudi Pro League",
     "4790": "UEFA Champions League",
 }
+
+LEAGUE_IDS = [x.strip() for x in os.getenv(
+    "LEAGUE_IDS", "4328,4335,4332,4331,4334,4480,4790"
+).split(",") if x.strip()]
+
+YACINE_PACKAGE = os.getenv("YACINE_PACKAGE", "com.yacine.app").strip()
+GENERAL_PACKAGE = os.getenv("GENERAL_PACKAGE", "com.general.live").strip()
+YACINE_SCHEME = os.getenv("YACINE_SCHEME", "yacine").strip()
+GENERAL_SCHEME = os.getenv("GENERAL_SCHEME", "general").strip()
 
 # ============================== قاعدة البيانات
 def db() -> sqlite3.Connection:
@@ -189,66 +142,6 @@ def is_bassam_query(user_text: str) -> bool:
 def is_sensitive_personal_query(user_text: str) -> bool:
     q = normalize_ar(user_text);  return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
 
-# ============================== تلخيص بسيط
-def _clean(txt: str) -> str:
-    txt = (txt or "").strip()
-    return re.sub(r"[^\w\s\u0600-\u06FF]", " ", txt)
-
-def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
-    text = " ".join(_clean(s) for s in snippets if s).strip()
-    parts = re.split(r"[.!؟\n]", text)
-    cleaned, seen = [], set()
-    for p in parts:
-        p = re.sub(r"\s+", " ", p).strip(" -•،,")
-        if len(p.split()) >= 4:
-            key = p[:80]
-            if key not in seen:
-                seen.add(key); cleaned.append(p)
-        if len(cleaned) >= max_items: break
-    return cleaned
-
-# ============================== البحث (Serper ثم DuckDuckGo)
-async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
-    if not SERPER_API_KEY:
-        raise RuntimeError("No SERPER_API_KEY configured")
-    url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-    payload = {"q": q, "num": num, "hl": "ar"}
-    async with httpx.AsyncClient(timeout=25) as client_httpx:
-        r = await client_httpx.post(url, headers=headers, json=payload)
-        r.raise_for_status(); data = r.json()
-    out = []
-    for it in (data.get("organic", []) or [])[:num]:
-        out.append({"title": it.get("title"), "link": it.get("link"),
-                    "snippet": it.get("snippet"), "source": "Google"})
-    return out
-
-def search_duckduckgo(q: str, num: int = 6) -> List[Dict]:
-    out = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(q, region="xa-ar", safesearch="moderate", max_results=num):
-            out.append({"title": r.get("title"),
-                        "link": r.get("href") or r.get("url"),
-                        "snippet": r.get("body"), "source": "DuckDuckGo"})
-            if len(out) >= num: break
-    return out
-
-async def smart_search(q: str, num: int = 6) -> Dict:
-    q = (q or "").strip()
-    try:
-        used, results = None, []
-        if SERPER_API_KEY:
-            try:
-                results = await search_google_serper(q, num); used = "Google"
-            except Exception:
-                results = search_duckduckgo(q, num); used = "DuckDuckGo"
-        else:
-            results = search_duckduckgo(q, num); used = "DuckDuckGo"
-        bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
-        return {"ok": True, "used": used, "bullets": bullets, "results": results}
-    except Exception as e:
-        traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
-
 # ============================== صفحات HTML
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -258,7 +151,7 @@ def home(request: Request):
 def health():
     return {"ok": True}
 
-# ============================== بحث نصي
+# ============================== بحث نصي (واجهة صفحة)
 @app.post("/search", response_class=HTMLResponse)
 async def search(request: Request, q: str = Form(...)):
     q = (q or "").strip()
@@ -287,17 +180,24 @@ async def search(request: Request, q: str = Form(...)):
         ctx = {"request": request, "query": q, "engine_used": "CANNED_PRIVACY", "results": [], "bullets": [SENSITIVE_PRIVACY_ANSWER]}
         return templates.TemplateResponse("index.html", ctx)
 
-    result = await smart_search(q, num=8)
+    # البحث الذكي + تلخيص
+    result = await smart_search(q, max_results=8, google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID)
     ip = request.client.host if request.client else "?"
     ua = request.headers.get("user-agent", "?")
     log_event("search", ip, ua, query=q, engine_used=result.get("used"))
 
-    ctx = {"request": request, "query": q,
-           "engine_used": result.get("used"),
-           "results": result.get("results", []),
-           "bullets": result.get("bullets", [])}
-    if not result.get("ok"):
-        ctx["error"] = f"⚠️ حدث خطأ في البحث: {result.get('error')}"
+    # لو في مقتطفات قليلة، نعزز بجلب نصوص الصفحات لأفضل خلاصة
+    if not any(r.get("snippet") for r in result.get("results", [])):
+        texts = await deep_fetch_texts(result.get("results", []), max_pages=5)
+        bullets_txt = smart_summarize(q, texts, max_bullets=7)
+        ctx = {"request": request, "query": q, "engine_used": result.get("used"),
+               "results": result.get("results", []), "bullets": bullets_txt.split("\n")}
+        return templates.TemplateResponse("index.html", ctx)
+
+    # عرض منسّق عبر نواة omni_brain
+    html_block = summarize_answer(q, result.get("results", []))
+    ctx = {"request": request, "query": q, "engine_used": result.get("used"),
+           "results": result.get("results", []), "html_block": html_block}
     return templates.TemplateResponse("index.html", ctx)
 
 # ============================== رفع صورة + روابط عدسات
@@ -332,102 +232,66 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         traceback.print_exc()
         return templates.TemplateResponse("index.html", {"request": request, "error": f"فشل رفع الصورة: {e}"})
 
-# ============================== API: ردّ الذكاء (محلي أولاً ثم OpenAI كاحتياط)
+# ============================== API: السؤال كـ JSON
 @app.post("/api/ask")
 async def api_ask(request: Request):
     try:
         data = await request.json()
-        q = (data.get("q") or "").strip()
-        if not q:
-            return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
+    except Exception:
+        form = await request.form()
+        data = {"q": form.get("q")}
 
-        # ردود ثابتة
-        if is_intro_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED_INTRO")
-            return JSONResponse({"ok": True, "engine_used": "CANNED_INTRO",
-                                 "answer": INTRO_ANSWER,
-                                 "bullets": make_bullets([INTRO_ANSWER], max_items=3),
-                                 "sources": []})
+    q = (data.get("q") or "").strip()
+    if not q:
+        return JSONResponse({"ok": False, "error": "no_query"}, status_code=400)
 
-        if is_bassam_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED")
-            return JSONResponse({"ok": True, "engine_used": "CANNED",
-                                 "answer": CANNED_ANSWER,
-                                 "bullets": make_bullets([CANNED_ANSWER], max_items=4),
-                                 "sources": []})
-
-        if is_sensitive_personal_query(q):
-            ip = request.client.host if request.client else "?"
-            ua = request.headers.get("user-agent", "?")
-            log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
-            return JSONResponse({"ok": True, "engine_used": "CANNED_PRIVACY",
-                                 "answer": SENSITIVE_PRIVACY_ANSWER,
-                                 "bullets": make_bullets([SENSITIVE_PRIVACY_ANSWER], max_items=4),
-                                 "sources": []})
-
-        # نتائج بحث مختصرة لاستخدامها كـ context
-        search = await smart_search(q, num=6)
-        sources = search.get("results", [])
-        context_lines = []
-        for i, r in enumerate(sources, start=1):
-            title = (r.get("title") or "").strip()
-            link = (r.get("link") or "").strip()
-            snippet = (r.get("snippet") or "").strip()
-            context_lines.append(f"{i}. {title}\n{snippet}\n{link}")
-
+    # ردود ثابتة
+    if is_intro_query(q):
         ip = request.client.host if request.client else "?"
         ua = request.headers.get("user-agent", "?")
+        log_event("ask", ip, ua, query=q, engine_used="CANNED_INTRO")
+        return JSONResponse({"ok": True, "engine_used": "CANNED_INTRO",
+                             "answer": INTRO_ANSWER, "bullets": [INTRO_ANSWER], "sources": []})
 
-        # 1) المحلي أولاً (إن كان مُعدًا أو لو لا يوجد OpenAI)
-        local_first = (USE_LOCAL_FIRST == "1") or (not client)
-        if local_first:
-            local = await ask_local_llm(q, context_lines)
-            if local.get("ok"):
-                log_event("ask", ip, ua, query=q, engine_used="Local")
-                answer = local["answer"]
-                bullets = make_bullets([answer], max_items=8)
-                return JSONResponse({"ok": True, "engine_used": "Local",
-                                     "answer": answer, "bullets": bullets, "sources": sources})
-            # لو فشل المحلي ولم يوجد OpenAI -> نرجّع ملخص البحث
-            if not client:
-                return JSONResponse({
-                    "ok": True, "engine_used": search.get("used"),
-                    "answer": "⚠️ تعذر الاتصال بالنموذج المحلي، أعرض لك ملخصًا من النتائج.",
-                    "bullets": search.get("bullets", []), "sources": sources
-                })
+    if is_bassam_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("ask", ip, ua, query=q, engine_used="CANNED")
+        return JSONResponse({"ok": True, "engine_used": "CANNED",
+                             "answer": CANNED_ANSWER, "bullets": [CANNED_ANSWER], "sources": []})
 
-        # 2) OpenAI كاحتياط/أو أساسي إذا USE_LOCAL_FIRST=0
-        if client:
-            system_msg = ("أنت مساعد عربي خبير. أجب بإيجاز ووضوح وبنقاط مركزة عند الحاجة. "
-                          "اعتمد على المعلومات التالية من نتائج البحث كمراجع خارجية. إن لم تكن واثقًا قل لا أعلم.")
-            user_msg = f"السؤال:\n{q}\n\nنتائج البحث (للاستئناس والاستشهاد):\n" + "\n\n".join(context_lines[:6])
+    if is_sensitive_personal_query(q):
+        ip = request.client.host if request.client else "?"
+        ua = request.headers.get("user-agent", "?")
+        log_event("ask", ip, ua, query=q, engine_used="CANNED_PRIVACY")
+        return JSONResponse({"ok": True, "engine_used": "CANNED_PRIVACY",
+                             "answer": SENSITIVE_PRIVACY_ANSWER, "bullets": [SENSITIVE_PRIVACY_ANSWER], "sources": []})
 
-            resp = client.chat.completions.create(
-                model=LLM_MODEL or "gpt-5-mini",
-                messages=[{"role": "system", "content": system_msg},
-                          {"role": "user", "content": user_msg}],
-                temperature=0.3, max_tokens=600,
-            )
-            answer = (resp.choices[0].message.content or "").strip()
-            bullets = make_bullets([answer], max_items=8)
+    # البحث
+    result = await smart_search(q, max_results=8, google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID)
+    sources = result.get("results", [])
 
-            log_event("ask", ip, ua, query=q, engine_used=f"OpenAI:{LLM_MODEL}")
-            return JSONResponse({"ok": True, "engine_used": f"OpenAI:{LLM_MODEL}",
-                                 "answer": answer, "bullets": bullets, "sources": sources})
+    # توليد HTML من النواة
+    if any(r.get("snippet") for r in sources):
+        html_block = summarize_answer(q, sources)
+        bullets_txt = None
+    else:
+        # تعزيز بالزحف الخفيف لاستخراج نصوص ثم تلخيص
+        texts = await deep_fetch_texts(sources, max_pages=5)
+        bullets_txt = smart_summarize(q, texts, max_bullets=7)
+        html_block = None
 
-        # 3) لا محلي ولا OpenAI
-        return JSONResponse({
-            "ok": True, "engine_used": search.get("used"),
-            "answer": "⚠️ لا يوجد اتصال بنموذج محلي ولا OpenAI، أعرض ملخصًا من النتائج.",
-            "bullets": search.get("bullets", []), "sources": sources
-        })
+    ip = request.client.host if request.client else "?"
+    ua = request.headers.get("user-agent", "?")
+    log_event("ask", ip, ua, query=q, engine_used=result.get("used"))
 
-    except Exception as e:
-        traceback.print_exc();  return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({
+        "ok": True,
+        "engine_used": result.get("used"),
+        "html": html_block,
+        "bullets": bullets_txt.split("\n") if bullets_txt else None,
+        "sources": [{"title": s.get("title"), "url": s.get("link")} for s in sources],
+    })
 
 # ============================== Service Workers
 @app.get("/sw.js")
@@ -514,31 +378,6 @@ def admin_export(request: Request):
     return StreamingResponse(iter([output.read()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=bassam-logs.csv"})
 
-# ============================== إرسال إشعارات يدوية من لوحة الإدارة (اختياري)
-@app.get("/admin/push-test")
-def admin_push_test(request: Request, title: str = "📣 إشعار تجريبي", body: str = "مرحبًا! هذا إشعار من بسام الذكي"):
-    if not is_admin(request):
-        return RedirectResponse(url="/admin?login=1", status_code=302)
-    ok = send_push(title, body, "/")
-    return JSONResponse({"ok": ok})
-
-@app.get("/admin/push-match")
-def admin_push_match(request: Request,
-                     home: str = "Al Hilal",
-                     away: str = "Al Nassr",
-                     before: bool = True):
-    if not is_admin(request):
-        return RedirectResponse(url="/admin?login=1", status_code=302)
-    if before:
-        title = f"⏰ بعد 30 دقيقة: {home} × {away}"
-        body = "جاهزين؟"
-    else:
-        title = f"🎬 بدأت الآن: {home} × {away}"
-        body = "انطلقت المباراة!"
-    deeplink_path = f"/deeplink?match={quote(f'{home} vs {away}')}"
-    ok = send_push(title, body, deeplink_path)
-    return JSONResponse({"ok": ok})
-
 # ============================== مباريات اليوم + إشعارات OneSignal (بتوقيت مكة)
 def _to_local(date_str: str, time_str: str) -> dt.datetime:
     t = (time_str or "00:00:00").split("+")[0]
@@ -552,10 +391,7 @@ def fetch_today_matches() -> List[Dict]:
     s_today = today.strftime("%Y-%m-%d")
     matches: List[Dict] = []
     with httpx.Client(timeout=20) as client:
-        for lid in LEAGUE_IDS:
-            lname = LEAGUE_NAME_BY_ID.get(lid)
-            if not lname:
-                continue
+        for lid, lname in LEAGUE_NAME_BY_ID.items():
             url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={s_today}&l={quote(lname)}"
             try:
                 data = client.get(url).json()
@@ -598,7 +434,6 @@ def send_push(title: str, body: str, url_path: str = "/") -> bool:
         return False
 
 def job_daily_digest_15():
-    """ملخص مباريات اليوم — الساعة 15:00 بتوقيت مكة"""
     matches = fetch_today_matches()
     if not matches:
         return
@@ -608,7 +443,6 @@ def job_daily_digest_15():
     send_push(title, body, "/")
 
 def job_half_hour_and_kickoff():
-    """كل 5 دقائق: إشعار قبل 30 دقيقة + عند البداية (بتوقيت مكة)"""
     matches = fetch_today_matches()
     if not matches:
         return
@@ -616,11 +450,9 @@ def job_half_hour_and_kickoff():
     for m in matches:
         mins = int((m["kickoff"] - now).total_seconds() // 60)
         if 25 <= mins <= 35:
-            send_push(f"⏰ بعد 30 دقيقة: {m['home']} × {m['away']}",
-                      f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"⏰ بعد 30 دقيقة: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
         if -2 <= mins <= 2:
-            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}",
-                      f"البطولة: {m['league']}", m["click_url"])
+            send_push(f"🎬 بدأت الآن: {m['home']} × {m['away']}", f"البطولة: {m['league']}", m["click_url"])
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
