@@ -6,6 +6,7 @@ import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
 import datetime as dt
 from typing import Optional, List, Dict
 from urllib.parse import quote
+from collections import Counter
 
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import (
@@ -207,6 +208,119 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(cleaned) >= max_items: break
     return cleaned
 
+# ============================== تلخيص ذكي (Snippets فقط) — بدون API
+_AR_STOP = {
+    "في","على","من","إلى","عن","مع","هذا","هذه","ذلك","تلك","ثم","او","أو","و","يا","ما","ماذا","كيف","هل",
+    "قد","لقد","لم","لن","لا","نعم","كل","أي","اي","تم","كما","إن","أن","اذا","إذا","لكن","لأن","لان","بسبب",
+    "هو","هي","هم","هن","أنا","انت","أنت","نحن","كان","كانت","يكون","تكون","ضمن","بين","بعد","قبل","عند","حتى"
+}
+
+def _clean_text(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"http\S+|www\.\S+", " ", s)  # إزالة الروابط
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+def _split_sentences(text: str) -> List[str]:
+    text = _clean_text(text)
+    if not text:
+        return []
+    parts = re.split(r"[\.!\?؟\n\r]+", text)
+    out = []
+    for p in parts:
+        p = p.strip(" -–—•\t")
+        if 20 <= len(p) <= 240:
+            out.append(p)
+    return out
+
+def _tokens(s: str) -> List[str]:
+    s = re.sub(r"[^\u0600-\u06FFa-zA-Z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    toks = [t for t in s.split() if len(t) > 2 and t not in _AR_STOP]
+    return toks
+
+def _jaccard(a: List[str], b: List[str]) -> float:
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / max(1, len(sa | sb))
+
+def advanced_summary_from_snippets(query: str, snippets: List[str], max_bullets: int = 10) -> List[str]:
+    """
+    تلخيص Extractive ذكي من الـ snippets فقط (مناسب للـ RAM القليلة).
+    يرجع قائمة نقاط bullets للعرض كما هي في الواجهة.
+    """
+    q_toks = _tokens(query)
+    q_set = set(q_toks)
+
+    sentences: List[str] = []
+    for sn in snippets or []:
+        for sent in _split_sentences(sn or ""):
+            sentences.append(sent)
+
+    if not sentences:
+        return ["لا توجد بيانات كافية في نتائج البحث لعمل ملخص مفيد. جرّب توسيع السؤال أو إعادة صياغته."]
+
+    all_toks: List[str] = []
+    sent_toks: List[List[str]] = []
+    for s in sentences:
+        toks = _tokens(s)
+        sent_toks.append(toks)
+        all_toks.extend(toks)
+
+    freq = Counter(all_toks)
+
+    scored = []
+    for s, toks in zip(sentences, sent_toks):
+        if not toks:
+            continue
+        overlap = len(set(toks) & q_set)
+        overlap_score = overlap / max(1, len(q_set))  # 0..1 تقريبًا
+        info_score = sum(min(freq[t], 5) for t in toks) / max(1, len(toks))
+        generic_penalty = 0.15 if len(toks) < 7 else 0.0
+        score = (1.4 * overlap_score) + (0.6 * info_score) - generic_penalty
+        scored.append((score, s, toks))
+
+    if not scored:
+        return ["لم أستطع استخراج جمل مناسبة للتلخيص من مقتطفات البحث."]
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    selected: List[str] = []
+    selected_toks: List[List[str]] = []
+
+    for score, s, toks in scored:
+        if len(selected) >= max_bullets:
+            break
+        if any(_jaccard(toks, st) > 0.55 for st in selected_toks):
+            continue
+        if q_set and len(set(toks) & q_set) == 0 and score < 0.40:
+            continue
+        selected.append(s)
+        selected_toks.append(toks)
+
+    if not selected:
+        selected = [s for _, s, _ in scored[:min(max_bullets, 8)]]
+
+    def closeness(toks: List[str]) -> int:
+        return len(set(toks) & q_set)
+
+    ranked = []
+    for s in selected:
+        toks = _tokens(s)
+        ranked.append((closeness(toks), len(toks), s))
+    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    bullets: List[str] = []
+    for _, _, s in ranked:
+        s = _clean_text(s)
+        if s and s not in bullets:
+            bullets.append(s)
+        if len(bullets) >= max_bullets:
+            break
+
+    return bullets
+
 # ============================== البحث (Serper ثم DuckDuckGo)
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
     if not SERPER_API_KEY:
@@ -244,7 +358,10 @@ async def smart_search(q: str, num: int = 6) -> Dict:
                 results = search_duckduckgo(q, num); used = "DuckDuckGo"
         else:
             results = search_duckduckgo(q, num); used = "DuckDuckGo"
-        bullets = make_bullets([r.get("snippet") for r in results], max_items=8)
+
+        snips = [r.get("snippet") for r in results]
+        bullets = advanced_summary_from_snippets(q, snips, max_bullets=10)
+
         return {"ok": True, "used": used, "bullets": bullets, "results": results}
     except Exception as e:
         traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
