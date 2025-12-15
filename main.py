@@ -2,7 +2,7 @@
 # بحث + رفع صور + GPT/محلي + إشعارات مباريات OneSignal + Deeplink ياسين/جنرال
 # لوحة إدارة + Service Worker + مسارات OneSignal Worker على الجذر
 
-import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re
+import os, uuid, json, traceback, sqlite3, hashlib, io, csv, re, asyncio
 import datetime as dt
 from typing import Optional, List, Dict
 from urllib.parse import quote
@@ -190,7 +190,7 @@ def is_bassam_query(user_text: str) -> bool:
 def is_sensitive_personal_query(user_text: str) -> bool:
     q = normalize_ar(user_text);  return any(re.search(p, q) for p in SENSITIVE_PATTERNS)
 
-# ============================== تلخيص بسيط
+# ============================== تلخيص بسيط (Fallback)
 def _clean(txt: str) -> str:
     txt = (txt or "").strip()
     return re.sub(r"[^\w\s\u0600-\u06FF]", " ", txt)
@@ -208,18 +208,34 @@ def make_bullets(snippets: List[str], max_items: int = 8) -> List[str]:
         if len(cleaned) >= max_items: break
     return cleaned
 
-# ============================== تلخيص ذكي (Snippets فقط) — بدون API
-_AR_STOP = {
-    "في","على","من","إلى","عن","مع","هذا","هذه","ذلك","تلك","ثم","او","أو","و","يا","ما","ماذا","كيف","هل",
-    "قد","لقد","لم","لن","لا","نعم","كل","أي","اي","تم","كما","إن","أن","اذا","إذا","لكن","لأن","لان","بسبب",
-    "هو","هي","هم","هن","أنا","انت","أنت","نحن","كان","كانت","يكون","تكون","ضمن","بين","بعد","قبل","عند","حتى"
-}
+# ============================== تلخيص عام “ذكي” (بدون LLM) + فتح أفضل رابطين (B)
+_AR_STOP = set([
+    "في","من","على","الى","إلى","عن","ما","ماذا","هل","كم","كيف","متى","اين","أين","لماذا",
+    "هذا","هذه","ذلك","تلك","هناك","هنا","هو","هي","هم","هن","انا","أنت","انت","نحن","لكن","او","أو",
+    "مع","بدون","قبل","بعد","ثم","كما","ايضا","أيضا","قد","تم","تمت","يكون","تكون","يمكن","لا","نعم",
+    "جدا","جداً","مثل","عند","ضمن","بين","حتى","اذا","إذا"
+])
+
+_BAD_PHRASES = [
+    "more videos", "you may like", "subscribe", "like", "share", "channel",
+    "اشترك", "اشتراك", "لايك", "شارك", "قناة", "فيديو", "youtube", "videos", "shorts",
+    "اقرأ المزيد", "read more", "privacy", "cookies", "terms", "policy"
+]
 
 def _clean_text(s: str) -> str:
     s = (s or "").strip()
-    s = re.sub(r"http\S+|www\.\S+", " ", s)  # إزالة الروابط
+    s = re.sub(r"https?://\S+", " ", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
+
+def _looks_bad(line: str) -> bool:
+    t = normalize_ar(line)
+    for bp in _BAD_PHRASES:
+        if normalize_ar(bp) in t:
+            return True
+    if len(line) < 20 or len(line) > 400:
+        return True
+    return False
 
 def _split_sentences(text: str) -> List[str]:
     text = _clean_text(text)
@@ -228,14 +244,15 @@ def _split_sentences(text: str) -> List[str]:
     parts = re.split(r"[\.!\?؟\n\r]+", text)
     out = []
     for p in parts:
-        p = p.strip(" -–—•\t")
-        if 20 <= len(p) <= 240:
+        p = p.strip(" -•،,")
+        if 20 <= len(p) <= 280:
             out.append(p)
     return out
 
 def _tokens(s: str) -> List[str]:
+    s = normalize_ar(s)
     s = re.sub(r"[^\u0600-\u06FFa-zA-Z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip().lower()
+    s = re.sub(r"\s+", " ", s).strip()
     toks = [t for t in s.split() if len(t) > 2 and t not in _AR_STOP]
     return toks
 
@@ -245,81 +262,189 @@ def _jaccard(a: List[str], b: List[str]) -> float:
         return 0.0
     return len(sa & sb) / max(1, len(sa | sb))
 
-def advanced_summary_from_snippets(query: str, snippets: List[str], max_bullets: int = 10) -> List[str]:
-    """
-    تلخيص Extractive ذكي من الـ snippets فقط (مناسب للـ RAM القليلة).
-    يرجع قائمة نقاط bullets للعرض كما هي في الواجهة.
-    """
+def _has_numbers(s: str) -> bool:
+    return bool(re.search(r"\d", s))
+
+def _intent_flags(q: str) -> Dict[str, bool]:
+    nq = normalize_ar(q)
+    is_how = nq.startswith("كيف") or "طريقه" in nq or "طريقة" in nq or "خطوات" in nq
+    is_warning = any(k in nq for k in ["تحذير","مخاطر","اضرار","أضرار","خطر","هل امن","هل آمن","ممنوع","لازم"])
+    is_price = any(k in nq for k in ["سعر","كم","تكلفه","تكلفة","رسوم","تعرفه","تعرفة","قيمة","قيمه"])
+    return {"how": is_how, "warn": is_warning, "price": is_price}
+
+def _extract_main_text_from_html(html: str) -> str:
+    if not html:
+        return ""
+    html = re.sub(r"(?is)<script.*?>.*?</script>", " ", html)
+    html = re.sub(r"(?is)<style.*?>.*?</style>", " ", html)
+    html = re.sub(r"(?is)<!--.*?-->", " ", html)
+
+    parts = []
+    for tag in ["p", "li", "h1", "h2", "h3"]:
+        parts += re.findall(rf"(?is)<{tag}[^>]*>(.*?)</{tag}>", html)
+
+    if not parts:
+        txt = re.sub(r"(?is)<[^>]+>", " ", html)
+        txt = re.sub(r"\s+", " ", txt)
+        return txt.strip()
+
+    txt = " ".join(parts)
+    txt = re.sub(r"(?is)<[^>]+>", " ", txt)
+    txt = re.sub(r"&nbsp;|&#160;", " ", txt)
+    txt = re.sub(r"&amp;", "&", txt)
+    txt = re.sub(r"&quot;", '"', txt)
+    txt = re.sub(r"&#39;|&apos;", "'", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+async def _fetch_url_text(url: str, timeout_s: int = 10) -> str:
+    if not url or not url.startswith("http"):
+        return ""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ar,en;q=0.8"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as ax:
+            r = await ax.get(url, headers=headers)
+        if r.status_code != 200:
+            return ""
+        ctype = (r.headers.get("content-type") or "").lower()
+        if "text/html" not in ctype:
+            return ""
+        return _extract_main_text_from_html(r.text)
+    except Exception:
+        return ""
+
+def _pick_top_links(results: List[Dict], k: int = 2) -> List[str]:
+    links, seen_domains = [], set()
+    for r in results or []:
+        link = (r.get("link") or "").strip()
+        if not link.startswith("http"):
+            continue
+        dom = re.sub(r"^https?://", "", link).split("/")[0].lower()
+        if dom in seen_domains:
+            continue
+        seen_domains.add(dom)
+        links.append(link)
+        if len(links) >= k:
+            break
+    return links
+
+def _score_sentence(q_set: set, toks: List[str], sent: str) -> float:
+    if not toks:
+        return 0.0
+    overlap = len(q_set & set(toks))
+    overlap_score = overlap / max(1, len(q_set))
+    length = len(toks)
+    length_score = min(1.0, length / 18.0)
+    num_bonus = 0.20 if _has_numbers(sent) else 0.0
+    verb_bonus = 0.12 if any(k in normalize_ar(sent) for k in ["ينصح","يوصى","يساعد","يفيد","يجب","يفضل","تجنب","تحتاج","خطوه","خطوة"]) else 0.0
+    return (1.5 * overlap_score) + (0.6 * length_score) + num_bonus + verb_bonus
+
+def summarize_text_general(query: str, texts: List[str], max_sentences: int = 14) -> List[str]:
     q_toks = _tokens(query)
     q_set = set(q_toks)
 
-    sentences: List[str] = []
-    for sn in snippets or []:
-        for sent in _split_sentences(sn or ""):
-            sentences.append(sent)
+    sentences = []
+    for t in texts or []:
+        for s in _split_sentences(t or ""):
+            if _looks_bad(s):
+                continue
+            sentences.append(s)
 
     if not sentences:
-        return ["لا توجد بيانات كافية في نتائج البحث لعمل ملخص مفيد. جرّب توسيع السؤال أو إعادة صياغته."]
+        return []
 
-    all_toks: List[str] = []
-    sent_toks: List[List[str]] = []
+    all_toks, sent_toks = [], []
     for s in sentences:
         toks = _tokens(s)
         sent_toks.append(toks)
-        all_toks.extend(toks)
-
+        all_toks += toks
     freq = Counter(all_toks)
 
     scored = []
     for s, toks in zip(sentences, sent_toks):
-        if not toks:
-            continue
-        overlap = len(set(toks) & q_set)
-        overlap_score = overlap / max(1, len(q_set))  # 0..1 تقريبًا
-        info_score = sum(min(freq[t], 5) for t in toks) / max(1, len(toks))
-        generic_penalty = 0.15 if len(toks) < 7 else 0.0
-        score = (1.4 * overlap_score) + (0.6 * info_score) - generic_penalty
+        base = _score_sentence(q_set, toks, s)
+        info = sum(min(freq.get(t, 0), 4) for t in toks) / max(1, len(toks))
+        score = base + (0.25 * info)
         scored.append((score, s, toks))
-
-    if not scored:
-        return ["لم أستطع استخراج جمل مناسبة للتلخيص من مقتطفات البحث."]
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    selected: List[str] = []
-    selected_toks: List[List[str]] = []
-
+    picked, picked_toks = [], []
     for score, s, toks in scored:
-        if len(selected) >= max_bullets:
+        if len(picked) >= max_sentences:
             break
-        if any(_jaccard(toks, st) > 0.55 for st in selected_toks):
+        if any(_jaccard(toks, pt) >= 0.68 for pt in picked_toks):
             continue
-        if q_set and len(set(toks) & q_set) == 0 and score < 0.40:
+        if q_set and len(set(toks) & q_set) == 0 and score < 0.55:
             continue
-        selected.append(s)
-        selected_toks.append(toks)
+        picked.append(s)
+        picked_toks.append(toks)
 
-    if not selected:
-        selected = [s for _, s, _ in scored[:min(max_bullets, 8)]]
+    return picked
 
-    def closeness(toks: List[str]) -> int:
-        return len(set(toks) & q_set)
+def organize_bullets_general(query: str, bullets: List[str]) -> List[str]:
+    if not bullets:
+        return bullets
 
-    ranked = []
-    for s in selected:
-        toks = _tokens(s)
-        ranked.append((closeness(toks), len(toks), s))
-    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    flags = _intent_flags(query)
 
-    bullets: List[str] = []
-    for _, _, s in ranked:
-        s = _clean_text(s)
-        if s and s not in bullets:
-            bullets.append(s)
-        if len(bullets) >= max_bullets:
-            break
+    steps_kw = ["خطوة", "خطوات", "طريقة", "طريقه", "كيف", "أولا", "ثانيا", "ثالثا", "ابدأ", "قم", "اتبع"]
+    warn_kw  = ["تحذير", "مخاطر", "اضرار", "أضرار", "خطر", "تجنب", "ممنوع", "انتبه", "لا تستخدم", "لا تفرط"]
+    num_kw   = ["سعر", "رسوم", "نسبة", "معدل", "كم", "مدة", "ساعات", "ايام", "أيام", "kg", "mm", "cm", "٪", "%", "ريال", "دولار"]
 
-    return bullets
+    summary, steps, warns, numbers, points = [], [], [], [], []
+
+    for b in bullets:
+        t = normalize_ar(b)
+        if any(normalize_ar(x) in t for x in warn_kw) or (flags["warn"] and "لا " in t):
+            warns.append(b); continue
+        if any(normalize_ar(x) in t for x in steps_kw) and flags["how"]:
+            steps.append(b); continue
+        if _has_numbers(b) and (flags["price"] or any(normalize_ar(x) in t for x in num_kw)):
+            numbers.append(b); continue
+        points.append(b)
+
+    summary = (points[:2] if points else bullets[:2])
+
+    def uniq(lst):
+        out, seen = [], set()
+        for x in lst:
+            k = x[:120]
+            if k not in seen:
+                seen.add(k); out.append(x)
+        return out
+
+    summary = uniq(summary)
+    points  = uniq([x for x in points if x not in summary])[:8]
+    steps   = uniq(steps)[:6]
+    warns   = uniq(warns)[:6]
+    numbers = uniq(numbers)[:6]
+
+    out = []
+    out.append("🟣 ملخص الجواب")
+    out.extend([f"• {x}" for x in summary])
+
+    if points:
+        out.append("🟣 أهم النقاط")
+        out.extend([f"• {x}" for x in points])
+
+    if flags["how"] and steps:
+        out.append("🟣 خطوات عملية")
+        out.extend([f"• {x}" for x in steps])
+
+    if numbers:
+        out.append("🟣 أرقام/حقائق")
+        out.extend([f"• {x}" for x in numbers])
+
+    if warns:
+        out.append("🟣 تحذيرات/ملاحظات")
+        out.extend([f"• {x}" for x in warns])
+
+    return out
 
 # ============================== البحث (Serper ثم DuckDuckGo)
 async def search_google_serper(q: str, num: int = 6) -> List[Dict]:
@@ -359,12 +484,33 @@ async def smart_search(q: str, num: int = 6) -> Dict:
         else:
             results = search_duckduckgo(q, num); used = "DuckDuckGo"
 
-        snips = [r.get("snippet") for r in results]
-        bullets = advanced_summary_from_snippets(q, snips, max_bullets=10)
+        # ✅ الروابط (الخانة الثانية) لا تتغير — نرجع results كما هي
+        # ✅ تطوير التلخيص فقط: نقرأ أفضل رابطين ونلخص منهما
+        links = _pick_top_links(results, k=2)
+        texts = []
+
+        if links:
+            fetched = await asyncio.gather(*[_fetch_url_text(u, timeout_s=10) for u in links], return_exceptions=True)
+            for t in fetched:
+                if isinstance(t, Exception):
+                    continue
+                if t and len(t) > 300:
+                    texts.append(t)
+
+        snippets = [r.get("snippet") for r in results if r.get("snippet")]
+        if not texts:
+            texts = snippets  # fallback إلى snippets لو فشل فتح الروابط
+
+        raw = summarize_text_general(q, texts, max_sentences=14)
+        if not raw:
+            raw = make_bullets(snippets, max_items=10)
+
+        bullets = organize_bullets_general(q, raw)
 
         return {"ok": True, "used": used, "bullets": bullets, "results": results}
     except Exception as e:
-        traceback.print_exc();  return {"ok": False, "used": None, "results": [], "error": str(e)}
+        traceback.print_exc()
+        return {"ok": False, "used": None, "results": [], "error": str(e)}
 
 # ============================== صفحات HTML
 @app.get("/", response_class=HTMLResponse)
@@ -509,7 +655,6 @@ async def api_ask(request: Request):
                 bullets = make_bullets([answer], max_items=8)
                 return JSONResponse({"ok": True, "engine_used": "Local",
                                      "answer": answer, "bullets": bullets, "sources": sources})
-            # لو فشل المحلي ولم يوجد OpenAI -> نرجّع ملخص البحث
             if not client:
                 return JSONResponse({
                     "ok": True, "engine_used": search.get("used"),
@@ -741,8 +886,8 @@ def job_half_hour_and_kickoff():
 
 def start_scheduler():
     sch = BackgroundScheduler(timezone=TIMEZONE)
-    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))   # ⏰ 15:00 يوميًا مكة
-    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))  # ⏱️ كل 5 دقائق
+    sch.add_job(job_daily_digest_15, CronTrigger(hour=15, minute=0, timezone=TIMEZONE))
+    sch.add_job(job_half_hour_and_kickoff, CronTrigger(minute="*/5", timezone=TIMEZONE))
     sch.start()
 
 @app.on_event("startup")
